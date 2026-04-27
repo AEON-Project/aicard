@@ -1,0 +1,48 @@
+{
+  "name": "@aeon-ai-pay/aicard",
+  "version": "0.7.4",
+  "description": "CLI & Agent skill for purchasing virtual debit cards via x402 protocol",
+  "type": "module",
+  "bin": {
+    "aicard": "bin/cli.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "scripts",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.mjs",
+    "create": "node bin/cli.mjs create",
+    "status": "node bin/cli.mjs status",
+    "wallet": "node bin/cli.mjs wallet",
+    "release": "node scripts/release.mjs"
+  },
+  "dependencies": {
+    "@aeon-ai-pay/axios": "2.1.2",
+    "@aeon-ai-pay/evm": "2.1.3",
+    "@walletconnect/sign-client": "^2.17.0",
+    "axios": "^1.13.2",
+    "commander": "^13.0.0",
+    "qrcode-terminal": "^0.12.0",
+    "viem": "^2.39.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "agent-skills",
+    "x402",
+    "virtual-card",
+    "crypto-payment",
+    "evm",
+    "bsc"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AEON-Project/aicard.git"
+  },
+  "license": "MIT"
+}

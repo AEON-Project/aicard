@@ -1,0 +1,33 @@
+# Installing x402-card
+
+This document explains how to install the `aicard` skill.
+
+## Install Instructions
+
+Pick the option that matches your runtime:
+
+### If you are an OpenClaw agent
+
+```bash
+clawhub install x402-card
+```
+
+Or install from the OpenClaw registry: [clawhub.ai/yuanyongm/aicard](https://clawhub.ai/yuanyongm/aicard)
+
+### If you are any other agent (Claude Code, Cursor, Codex, etc.)
+
+```bash
+npx skills add AEON-Project/aicard -g -y
+```
+
+## Staying Current
+
+The aicard skill includes a **Preflight: Stay Current** check that agents run once per session. It silently checks for newer versions of the skill files. If an update is available, the agent prompts the user. If everything is current, the agent proceeds without mentioning versioning.
+
+If `aicard` is already installed, you can also update manually at any time:
+
+- **OpenClaw agents**: `clawhub update aicard`
+- **Other agents**: re-run the install command above — it will replace the existing version with the latest.
+- **CLI auto-update**: `npx @aeon-ai-pay/aicard upgrade`
+
+Once installed, follow the instructions in the skill to start purchasing virtual cards.
