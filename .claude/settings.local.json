@@ -3,7 +3,13 @@
     "allow": [
       "Bash(aicard setup:*)",
       "Bash(npm install:*)",
-      "Bash(aicard create:*)"
+      "Bash(aicard create:*)",
+      "Bash(git:*)",
+      "Bash(wc:*)",
+      "Bash(find /Users/yuanyong/work/aeon/aicard -maxdepth 2 -not -path */node_modules/* -not -path */.git/* -not -path */.idea/*)",
+      "Bash(node -e \"const pkg = require\\(''./node_modules/@walletconnect/jsonrpc-utils/package.json''\\); console.log\\(pkg.name, pkg.version\\)\")",
+      "Bash(node -e \"const pkg = require\\(''./node_modules/@walletconnect/jsonrpc-ws-connection/package.json''\\); console.log\\(pkg.name, pkg.version\\)\")",
+      "Bash(node -e \"const pkg = require\\(''./node_modules/@walletconnect/sign-client/package.json''\\); console.log\\(pkg.name, pkg.version\\)\")"
     ]
   }
 }

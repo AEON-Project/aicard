@@ -1,5 +1,19 @@
 #!/usr/bin/env node
 
+// WalletConnect v2 SDK 已知缺陷：relay 偶发 null WebSocket 帧导致
+// isJsonRpcPayload 内部 'id' in null 抛 TypeError，不影响业务流程，静默忽略
+process.on("uncaughtException", (err) => {
+  if (
+    err instanceof TypeError &&
+    err.message.includes("Cannot use 'in' operator") &&
+    err.stack?.includes("isJsonRpcPayload")
+  ) {
+    return; // 静默忽略 WalletConnect 内部错误
+  }
+  console.error(err);
+  process.exit(1);
+});
+
 import { Command } from "commander";
 import { checkForUpdates } from "../src/update-check.mjs";
 import { readFileSync } from "node:fs";
