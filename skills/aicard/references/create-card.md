@@ -26,7 +26,7 @@ Once the user specifies an amount, **execute immediately** — no second confirm
 
 ```bash
 # Create card and auto-poll status
-npx @aeon-ai-pay/x402-card create --amount <amount> --poll
+npx @aeon-ai-pay/aicard create --amount <amount> --poll
 ```
 
 CLI automatically handles the full flow:

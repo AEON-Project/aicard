@@ -1,4 +1,4 @@
-# Installing x402-card
+# Installing aicard
 
 This document explains how to install the `aicard` skill.
 
@@ -9,7 +9,7 @@ Pick the option that matches your runtime:
 ### If you are an OpenClaw agent
 
 ```bash
-clawhub install x402-card
+clawhub install aicard
 ```
 
 Or install from the OpenClaw registry: [clawhub.ai/yuanyongm/aicard](https://clawhub.ai/yuanyongm/aicard)
