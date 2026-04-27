@@ -430,6 +430,17 @@ export async function initSignClient(projectId) {
     ),
   ]);
 
+  // WalletConnect relay 偶发 null WebSocket 帧，导致 isJsonRpcPayload('id' in null) 崩溃
+  // 在 connection 层过滤掉 null payload，避免错误传播到 provider / request 链路
+  try {
+    const conn = client.core.relayer.provider.connection;
+    const _origEmit = conn.emit.bind(conn);
+    conn.emit = function (event, ...args) {
+      if (event === "payload" && args[0] == null) return false;
+      return _origEmit(event, ...args);
+    };
+  } catch {}
+
   // 清理残留 session + pairing（并行等待完成，确保 relay 状态干净后再建新连接）
   try {
     const sessions = client.session.getAll();
