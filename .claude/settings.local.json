@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(aicard setup:*)",
+      "Bash(npm install:*)",
+      "Bash(aicard create:*)"
+    ]
+  }
+}
