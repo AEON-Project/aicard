@@ -33,18 +33,32 @@ export function checkForUpdates(currentVersion) {
   // 有新版本：输出提示
   console.error(`[update] ${PKG_NAME} ${currentVersion} → ${latest}, upgrading in background...`);
 
-  // 后台执行升级
+  // 后台执行升级（结果写入日志文件）
   const script = `
     const { execFileSync } = require("child_process");
     const { join } = require("path");
+    const { appendFileSync, mkdirSync } = require("fs");
+    const { homedir } = require("os");
     const pkg = ${JSON.stringify(PKG_NAME)};
     const ver = ${JSON.stringify(latest)};
+    const logDir = join(homedir(), ".aicard");
+    const logFile = join(logDir, "update.log");
+    function log(msg) {
+      try {
+        mkdirSync(logDir, { recursive: true });
+        appendFileSync(logFile, new Date().toISOString() + " " + msg + "\\n");
+      } catch {}
+    }
     try {
+      log("Upgrading " + pkg + " to " + ver + "...");
       execFileSync("npm", ["install", "-g", pkg + "@" + ver], { timeout: 120000 });
       const root = execFileSync("npm", ["root", "-g"], { timeout: 10000 }).toString().trim();
       const postinstall = join(root, pkg, "scripts", "postinstall.mjs");
       execFileSync("node", [postinstall], { timeout: 30000 });
-    } catch {}
+      log("Upgrade to " + ver + " succeeded.");
+    } catch (e) {
+      log("Upgrade to " + ver + " failed: " + (e.message || e));
+    }
   `;
 
   const child = spawn("node", ["-e", script], {
