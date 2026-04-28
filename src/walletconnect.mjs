@@ -436,7 +436,10 @@ export async function initSignClient(projectId) {
     const conn = client.core.relayer.provider.connection;
     const _origEmit = conn.emit.bind(conn);
     conn.emit = function (event, ...args) {
-      if (event === "payload" && args[0] == null) return false;
+      if (event === "payload" && args[0] == null) {
+        console.error("[WC guard] Intercepted null WebSocket frame, skipped.");
+        return false;
+      }
       return _origEmit(event, ...args);
     };
   } catch {}

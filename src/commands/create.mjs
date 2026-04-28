@@ -73,16 +73,22 @@ export async function create(opts) {
 
     // 1. 检查预授权额度（是否已对 facilitator 做过无限额度 approve）
     const allowance = await getAllowance(address);
-    if (allowance >= BigInt(paymentReq.amountWei)) {
+    const requiredWei = BigInt(paymentReq.amountWei);
+    console.error(`Allowance: ${allowance.toString()} wei, Required: ${requiredWei.toString()} wei`);
+    if (requiredWei === 0n) {
+      console.error(JSON.stringify({ error: "Server returned invalid payment amount (0). Please retry later." }));
+      process.exit(1);
+    }
+    if (allowance >= requiredWei) {
       console.error("Allowance sufficient, no approve needed.");
     } else {
       // 预授权不足，需要 approve（消耗 BNB gas）
-      console.error("Approve authorization insufficient, need approve.");
+      console.error(`Approve authorization insufficient (allowance ${allowance} < required ${requiredWei}), need approve.`);
       if (bnbRaw === 0n) {
         needGas = true;
         console.error("No BNB for approve gas, will request BNB transfer.");
       } else {
-        console.error("BNB available for approve gas.");
+        console.error(`BNB available for approve gas (${bnb} BNB).`);
       }
     }
 
@@ -91,7 +97,13 @@ export async function create(opts) {
       needTopup = true;
       const shortfall = requiredUsdt - usdtNum;
       topupAmount = shortfall.toFixed(6);
+      console.error(`USDT insufficient: have ${usdtNum}, need ${requiredUsdt}, shortfall ${topupAmount}`);
+    } else {
+      console.error(`USDT sufficient: have ${usdtNum}, need ${requiredUsdt}`);
     }
+
+    console.error(`Decision: needTopup=${needTopup}, needGas=${needGas}${topupAmount ? `, topupAmount=${topupAmount}` : ""}`);
+
   } catch (e) {
     console.error(JSON.stringify({ error: `Balance check failed: ${e.message}` }));
     process.exit(1);
@@ -249,28 +261,24 @@ async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
 
     // BNB gas 充值
     if (needGas) {
-      try {
-        setStatus("signing", { amount: AUTO_GAS_BNB, token: "BNB", to: sessionAddress });
-        console.error(`\nRequesting BNB transfer: ${AUTO_GAS_BNB} BNB → ${sessionAddress} (for approve gas)`);
-        console.error("Please confirm the transaction in your wallet app...");
-        const bnbTxHash = await requestNativeTransfer(signClient, session, {
-          from: peerAddress,
-          to: sessionAddress,
-          value: AUTO_GAS_BNB,
-        });
-        setStatus("tx_submitted", { txHash: bnbTxHash, amount: AUTO_GAS_BNB, token: "BNB" });
-        console.error(`BNB transfer submitted: ${bnbTxHash}`);
-        const bnbReceipt = await publicClient.waitForTransactionReceipt({
-          hash: bnbTxHash,
-          timeout: 60_000,
-        });
-        if (bnbReceipt.status !== "success") {
-          throw new Error("BNB transfer reverted");
-        }
-        console.error("BNB transfer confirmed.");
-      } catch (bnbErr) {
-        console.error(`Warning: BNB auto-transfer failed (${bnbErr.message}). Run 'aicard gas' to add BNB manually.`);
+      setStatus("signing", { amount: AUTO_GAS_BNB, token: "BNB", to: sessionAddress });
+      console.error(`\nRequesting BNB transfer: ${AUTO_GAS_BNB} BNB → ${sessionAddress} (for approve gas)`);
+      console.error("Please confirm the transaction in your wallet app...");
+      const bnbTxHash = await requestNativeTransfer(signClient, session, {
+        from: peerAddress,
+        to: sessionAddress,
+        value: AUTO_GAS_BNB,
+      });
+      setStatus("tx_submitted", { txHash: bnbTxHash, amount: AUTO_GAS_BNB, token: "BNB" });
+      console.error(`BNB transfer submitted: ${bnbTxHash}`);
+      const bnbReceipt = await publicClient.waitForTransactionReceipt({
+        hash: bnbTxHash,
+        timeout: 60_000,
+      });
+      if (bnbReceipt.status !== "success") {
+        throw new Error("BNB transfer reverted");
       }
+      console.error("BNB transfer confirmed.");
     }
 
     setStatus("confirmed", { token: amount ? "USDT" : "BNB" });

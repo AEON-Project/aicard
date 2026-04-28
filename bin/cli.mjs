@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 
+const [major] = process.versions.node.split(".").map(Number);
+if (major < 25) {
+  console.error(`aicard requires Node.js >= 25. Current: v${process.versions.node}`);
+  console.error("Upgrade: https://nodejs.org/");
+  process.exit(1);
+}
+
 // WalletConnect v2 SDK 已知缺陷：relay 偶发 null WebSocket 帧导致
 // isJsonRpcPayload 内部 'id' in null 抛 TypeError，不影响业务流程，静默忽略
 process.on("uncaughtException", (err) => {
@@ -8,7 +15,8 @@ process.on("uncaughtException", (err) => {
     err.message.includes("Cannot use 'in' operator") &&
     err.stack?.includes("isJsonRpcPayload")
   ) {
-    return; // 静默忽略 WalletConnect 内部错误
+    console.error("[WC guard] Caught null-frame TypeError via uncaughtException, ignored.");
+    return;
   }
   console.error(err);
   process.exit(1);

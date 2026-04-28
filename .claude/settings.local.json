@@ -9,7 +9,20 @@
       "Bash(find /Users/yuanyong/work/aeon/aicard -maxdepth 2 -not -path */node_modules/* -not -path */.git/* -not -path */.idea/*)",
       "Bash(node -e \"const pkg = require\\(''./node_modules/@walletconnect/jsonrpc-utils/package.json''\\); console.log\\(pkg.name, pkg.version\\)\")",
       "Bash(node -e \"const pkg = require\\(''./node_modules/@walletconnect/jsonrpc-ws-connection/package.json''\\); console.log\\(pkg.name, pkg.version\\)\")",
-      "Bash(node -e \"const pkg = require\\(''./node_modules/@walletconnect/sign-client/package.json''\\); console.log\\(pkg.name, pkg.version\\)\")"
+      "Bash(node -e \"const pkg = require\\(''./node_modules/@walletconnect/sign-client/package.json''\\); console.log\\(pkg.name, pkg.version\\)\")",
+      "Bash(command -v nvm)",
+      "Bash(/usr/local/n/versions/node/22.1.0/bin/node -v)",
+      "Read(//usr/local/n/versions/node/**)",
+      "Bash(n ls:*)",
+      "Bash(/usr/local/opt/node@22/bin/node -v)",
+      "Read(//opt/homebrew/opt/**)",
+      "Bash(brew list:*)",
+      "Bash(/opt/homebrew/Cellar/node@22/22.22.2_2/bin/node bin/cli.mjs create --amount 1 --poll)",
+      "Bash(/opt/homebrew/Cellar/node@22/22.22.2_2/bin/node bin/cli.mjs create --amount 0.6 --poll 2>&1)",
+      "Bash(/opt/homebrew/Cellar/node@22/22.22.2_2/bin/node bin/cli.mjs setup --check 2>&1)",
+      "Bash(node:*)",
+      "Bash(/opt/homebrew/Cellar/node@22/22.22.2_2/bin/node bin/cli.mjs --version)",
+      "Bash(brew link:*)"
     ]
   }
 }
