@@ -263,6 +263,19 @@ async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
 
     // BNB gas 充值
     if (needGas) {
+      // 检查 WC session 是否仍然存活
+      try {
+        const activeSessions = signClient.session.getAll();
+        const sessionAlive = activeSessions.some(s => s.topic === session.topic);
+        console.error(`[WC session] alive=${sessionAlive}, topic=${session.topic}, active_sessions=${activeSessions.length}`);
+        if (!sessionAlive) {
+          throw new Error("WalletConnect session expired between USDT and BNB transfers. Run 'aicard gas' to add BNB manually.");
+        }
+      } catch (e) {
+        if (e.message.includes("session expired")) throw e;
+        console.error(`[WC session] health check error: ${e.message}`);
+      }
+
       setStatus("signing", { amount: AUTO_GAS_BNB, token: "BNB", to: sessionAddress });
       console.error(`\nRequesting BNB transfer: ${AUTO_GAS_BNB} BNB → ${sessionAddress} (for approve gas)`);
       console.error("Please confirm the transaction in your wallet app...");
