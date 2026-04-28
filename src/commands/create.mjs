@@ -224,7 +224,9 @@ async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
   // 页面展示：有 USDT 转账时显示 USDT 金额，仅 BNB gas 时显示 BNB 金额
   const pageAmount = amount || (needGas ? AUTO_GAS_BNB : null);
   const pageToken = amount ? "USDT" : "BNB";
-  await withWallet({ amount: pageAmount, token: pageToken }, async ({ signClient, session, peerAddress }) => {
+  // 需要 gas 且有 USDT 转账时，页面额外显示 Gas Amount 行
+  const pageGasAmount = (needGas && amount) ? AUTO_GAS_BNB : null;
+  await withWallet({ amount: pageAmount, token: pageToken, gasAmount: pageGasAmount }, async ({ signClient, session, peerAddress }) => {
     const { createPublicClient, http } = await import("viem");
     const { bsc } = await import("viem/chains");
     const publicClient = createPublicClient({

@@ -62,7 +62,7 @@ const QR_EXPIRE_MS = 5 * 60 * 1000;
  * @param {number} statusPort - 状态服务端口
  * @param {string|null} amount - 用户需要支付的 USDT 数量（如 "0.66"）
  */
-function openQRInBrowser(uri, statusPort, amount, token = "USDT", network = "BNB Chain(BEP20) only") {
+function openQRInBrowser(uri, statusPort, amount, token = "USDT", network = "BNB Chain(BEP20) only", gasAmount = null) {
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>AEON — Wallet Connect</title>
 <style>
@@ -148,6 +148,7 @@ function openQRInBrowser(uri, statusPort, amount, token = "USDT", network = "BNB
   const AMOUNT = ${JSON.stringify(amount || null)};
   const TOKEN = ${JSON.stringify(token)};
   const NETWORK = ${JSON.stringify(network)};
+  const GAS_AMOUNT = ${JSON.stringify(gasAmount || null)};
   const STATUS_URL = "http://127.0.0.1:${statusPort}/status";
   const EXPIRE_MS = ${QR_EXPIRE_MS};
   const startTime = Date.now();
@@ -256,8 +257,11 @@ function openQRInBrowser(uri, statusPort, amount, token = "USDT", network = "BNB
     const BNB_ICON = '<svg class="usdt-icon" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="9" cy="9" r="9" fill="#F3BA2F"/><path d="M9 4.5L7.2 6.3l-1.8-1.8L9 1.2l3.6 3.3-1.8 1.8L9 4.5zm-4.5 4.5L2.7 7.2 4.5 5.4l1.8 1.8L4.5 9zm4.5 4.5l-1.8-1.8-1.8 1.8L9 16.8l3.6-3.3-1.8-1.8L9 13.5zm4.5-4.5l1.8 1.8-1.8 1.8-1.8-1.8 1.8-1.8zM10.8 9L9 7.2 7.2 9 9 10.8 10.8 9z" fill="#fff"/></svg>';
     const TOKEN_ICON = TOKEN === 'BNB' ? BNB_ICON : USDT_ICON;
 
+    const BNB_ICON_GAS = '<svg class="usdt-icon" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="9" cy="9" r="9" fill="#F3BA2F"/><path d="M9 4.5L7.2 6.3l-1.8-1.8L9 1.2l3.6 3.3-1.8 1.8L9 4.5zm-4.5 4.5L2.7 7.2 4.5 5.4l1.8 1.8L4.5 9zm4.5 4.5l-1.8-1.8-1.8 1.8L9 16.8l3.6-3.3-1.8-1.8L9 13.5zm4.5-4.5l1.8 1.8-1.8 1.8-1.8-1.8 1.8-1.8zM10.8 9L9 7.2 7.2 9 9 10.8 10.8 9z" fill="#fff"/></svg>';
+    const fmtGas = GAS_AMOUNT ? String(GAS_AMOUNT).replace(/0+$/, '').replace(/\\.$/, '') + ' BNB' : '';
     const infoCardHTML = AMOUNT ? '<div class="info-card">' +
-      '<div class="info-row"><span class="info-label">Amount</span><span class="info-value green">' + TOKEN_ICON + fmtAmount(AMOUNT) + '</span></div>' +
+      '<div class="info-row"><span class="info-label">' + (GAS_AMOUNT ? 'Transaction Amount' : 'Amount') + '</span><span class="info-value green">' + TOKEN_ICON + fmtAmount(AMOUNT) + '</span></div>' +
+      (GAS_AMOUNT ? '<div class="info-row"><span class="info-label">Gas Amount</span><span class="info-value green">' + BNB_ICON_GAS + fmtGas + '</span></div>' : '') +
       '<div class="info-row"><span class="info-label">Network</span><span class="info-value">' + NETWORK + '</span></div>' +
       '</div>' : '';
 
@@ -476,7 +480,7 @@ export async function initSignClient(projectId) {
  * @param {string|null} amount - 需要展示的 USDT 金额（如 "0.66"）
  * @returns {{ session: object, peerAddress: string }}
  */
-export async function connectWallet(signClient, statusPort, amount = null, token = "USDT") {
+export async function connectWallet(signClient, statusPort, amount = null, token = "USDT", gasAmount = null) {
   const { uri, approval } = await signClient.connect({
     optionalNamespaces: {
       eip155: {
@@ -488,7 +492,7 @@ export async function connectWallet(signClient, statusPort, amount = null, token
   });
 
   // 生成 QR 码页面（含状态轮询）并在浏览器中打开
-  openQRInBrowser(uri, statusPort, amount, token);
+  openQRInBrowser(uri, statusPort, amount, token, "BNB Chain(BEP20) only", gasAmount);
   console.error("QR code opened in browser. Scan it with your wallet app.");
   console.error("Waiting for wallet approval...");
 
@@ -599,7 +603,7 @@ const FINAL_LINGER_MS = 2000;
  * @param {(ctx: { signClient, session, peerAddress }) => Promise<void>} fn
  */
 export async function withWallet(opts, fn) {
-  const { amount = null, token = "USDT", projectId = DEFAULT_WC_PROJECT_ID } = opts;
+  const { amount = null, token = "USDT", gasAmount = null, projectId = DEFAULT_WC_PROJECT_ID } = opts;
   const statusPort = await startStatusServer();
   let signClient = null;
   let session = null;
@@ -609,7 +613,7 @@ export async function withWallet(opts, fn) {
   try {
     signClient = await initSignClient(projectId);
     let peerAddress;
-    ({ session, peerAddress } = await connectWallet(signClient, statusPort, amount, token));
+    ({ session, peerAddress } = await connectWallet(signClient, statusPort, amount, token, gasAmount));
     console.error(`Wallet connected: ${peerAddress}`);
 
     await fn({ signClient, session, peerAddress });
