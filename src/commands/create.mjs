@@ -18,7 +18,7 @@ const AUTO_GAS_BNB = "0.0003";
 
 export async function create(opts) {
   console.error("Creating Agent Card...");
-  const serviceUrl = resolve(opts.serviceUrl, "X402_CARD_SERVICE_URL", "serviceUrl");
+  const serviceUrl = resolve(opts.serviceUrl, "AGENT_PAY_SERVICE_URL", "serviceUrl");
   const privateKey = resolve(opts.privateKey, "EVM_PRIVATE_KEY", "privateKey");
   const { amount, poll } = opts;
   const amountNum = parseFloat(amount);

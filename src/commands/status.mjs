@@ -4,7 +4,7 @@ import { sanitizeOutput } from "../sanitize.mjs";
 
 export async function status(opts) {
   const { default: axios } = await import("axios");
-  const serviceUrl = resolve(opts.serviceUrl, "X402_CARD_SERVICE_URL", "serviceUrl");
+  const serviceUrl = resolve(opts.serviceUrl, "AGENT_PAY_SERVICE_URL", "serviceUrl");
   const { orderNo, poll } = opts;
 
   if (!serviceUrl) {

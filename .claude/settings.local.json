@@ -22,7 +22,13 @@
       "Bash(/opt/homebrew/Cellar/node@22/22.22.2_2/bin/node bin/cli.mjs setup --check 2>&1)",
       "Bash(node:*)",
       "Bash(/opt/homebrew/Cellar/node@22/22.22.2_2/bin/node bin/cli.mjs --version)",
-      "Bash(brew link:*)"
+      "Bash(brew link:*)",
+      "Bash(mkdir -p /Users/yuanyong/work/aeon/agent-pay)",
+      "Bash(rsync -a --exclude='node_modules' --exclude='.git' --exclude='.idea' --exclude='package-lock.json' /Users/yuanyong/work/aeon/aicard/ /Users/yuanyong/work/aeon/agent-pay/)",
+      "Bash(curl -sS -o /tmp/x402-resp.json -w 'HTTP %{http_code}\\\\n' 'https://aeon-qrpay-dev.alchemytech.cc/open/ai/x402/skillBoss/create?body=__TRACKED_VAR__')",
+      "Read(//tmp/**)",
+      "Bash(nslookup aeon-qrpay-dev.alchemytech.cc)",
+      "Bash(curl -v --max-time 10 https://aeon-qrpay-dev.alchemytech.cc)"
     ]
   }
 }
