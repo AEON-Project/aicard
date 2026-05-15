@@ -65,8 +65,9 @@ export function createX402Api(privateKey) {
 /**
  * 第一次发起 x402 请求（不带签名），从 402 响应中提取实际付款要求
  * 同时保留完整的 402 响应数据和原始请求配置，供后续手动签名使用
+ * 字段名与 x402 v2 PaymentRequirements 标准对齐：asset、payTo、amount
  * @param {string} url
- * @returns {Promise<{amountUsdt: number, amountWei: string, decimals: number, tokenAddress: string, payToAddress: string, orderNo: string|null, raw402Response: object, requestConfig: object}>}
+ * @returns {Promise<{amountUsdt: number, amountWei: string, decimals: number, asset: string, payTo: string, orderNo: string|null, raw402Response: object, requestConfig: object}>}
  */
 export async function fetchPaymentRequirements(url) {
   const rawClient = axios.create();
@@ -79,14 +80,14 @@ export async function fetchPaymentRequirements(url) {
     const accept = data?.accepts?.[0];
     if (!accept) throw new Error("No payment requirements in 402 response");
     const decimals = accept.tokenDecimals || 18;
-    const amountWei = BigInt(accept.maxAmountRequired || accept.amountRequired);
+    const amountWei = BigInt(accept.amount);
     const amountUsdt = parseFloat(formatUnits(amountWei, decimals));
     return {
       amountUsdt,
       amountWei: amountWei.toString(),
       decimals,
-      tokenAddress: accept.tokenAddress,
-      payToAddress: accept.payToAddress,
+      asset: accept.asset,
+      payTo: accept.payTo,
       orderNo: data.orderNo || null,
       raw402Response: err.response,
       requestConfig: err.config,
@@ -95,16 +96,12 @@ export async function fetchPaymentRequirements(url) {
 }
 
 /**
- * 从响应头中解码 PAYMENT-RESPONSE
+ * 从响应头中解码 PAYMENT-RESPONSE（x402 v2）
  * @param {object} headers - axios response headers
  * @returns {object|null}
  */
 export function decodePaymentResponse(headers) {
-  const raw =
-    headers["payment-response"] ||
-    headers["PAYMENT-RESPONSE"] ||
-    headers["x-payment-response"] ||
-    headers["X-PAYMENT-RESPONSE"];
+  const raw = headers["payment-response"] || headers["PAYMENT-RESPONSE"];
   if (!raw) return null;
   try {
     return JSON.parse(Buffer.from(raw, "base64").toString("utf-8"));
