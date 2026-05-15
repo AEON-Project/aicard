@@ -10,7 +10,7 @@ const CONFIG_DIR = join(homedir(), ".aicard");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
 const DEFAULTS = {
-  serviceUrl: "https://aeon-qrpay-dev.alchemytech.cc",
+  serviceUrl: "https://ai-api.aeon.xyz",
 };
 
 export function loadConfig() {
