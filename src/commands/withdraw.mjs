@@ -7,22 +7,27 @@ import { bsc } from "viem/chains";
 import { loadConfig } from "../config.mjs";
 import { getBalanceByAddress } from "../balance.mjs";
 import { BSC_RPC_URL, USDT_BSC, ERC20_TRANSFER_ABI } from "../constants.mjs";
+import { emitOk, emitErr, logInfo } from "../output.mjs";
 
 const BNB_TRANSFER_GAS = 21000n;
 
 export async function withdraw(opts) {
-  console.error("Reclaiming funds...");
+  logInfo("Reclaiming funds...");
   const config = loadConfig();
 
   if (!config.privateKey || !config.address) {
-    console.error(JSON.stringify({ error: "No session key found. Nothing to withdraw." }));
-    process.exit(1);
+    emitErr("withdraw", "WALLET_NOT_CONFIGURED", {
+      message: "No session key found. Nothing to withdraw.",
+    });
+    return;
   }
 
   const mainWallet = opts.to || config.mainWallet;
   if (!mainWallet) {
-    console.error(JSON.stringify({ error: "No main wallet address found. Use --to <address> to specify." }));
-    process.exit(1);
+    emitErr("withdraw", "NO_MAIN_WALLET", {
+      message: "No main wallet address found. Use --to <address> to specify.",
+    });
+    return;
   }
 
   const sessionAddress = config.address;
@@ -40,16 +45,16 @@ export async function withdraw(opts) {
   });
 
   const balance = await getBalanceByAddress(sessionAddress);
-  console.error(`Session key: ${sessionAddress}`);
-  console.error(`Balance: ${balance.usdt} USDT, ${balance.bnb} BNB`);
-  console.error(`Withdraw to: ${mainWallet}`);
+  logInfo(`Session key: ${sessionAddress}`);
+  logInfo(`Balance: ${balance.usdt} USDT, ${balance.bnb} BNB`);
+  logInfo(`Withdraw to: ${mainWallet}`);
 
   const isWithdrawAll = !opts.amount;
 
   // 无任何资金
   if (balance.usdtRaw === 0n && balance.bnbRaw === 0n) {
-    console.error(JSON.stringify({ error: "No funds to withdraw." }));
-    process.exit(1);
+    emitErr("withdraw", "NO_FUNDS", { message: "No funds to withdraw." });
+    return;
   }
 
   let usdtTxHash = null;
@@ -59,22 +64,24 @@ export async function withdraw(opts) {
   if (balance.usdtRaw > 0n) {
     // USDT 转账需要 BNB 作 gas
     if (balance.bnbRaw === 0n) {
-      console.error(JSON.stringify({
-        error: "No BNB for gas. Withdraw is a normal on-chain transfer and requires BNB to pay gas.",
+      emitErr("withdraw", "INSUFFICIENT_BNB", {
+        message: "No BNB for gas. Withdraw is a normal on-chain transfer and requires BNB to pay gas.",
         address: sessionAddress,
         hint: "Run 'aicard gas' to top up BNB via WalletConnect, then retry.",
-      }));
-      process.exit(1);
+      });
+      return;
     }
 
     let withdrawAmount = balance.usdtRaw;
     if (opts.amount) {
       const requested = parseUnits(opts.amount, 18);
       if (requested > balance.usdtRaw) {
-        console.error(JSON.stringify({
-          error: `Requested ${opts.amount} USDT but only ${balance.usdt} available.`,
-        }));
-        process.exit(1);
+        emitErr("withdraw", "AMOUNT_EXCEEDS_BALANCE", {
+          message: `Requested ${opts.amount} USDT but only ${balance.usdt} available.`,
+          requested: opts.amount,
+          available: balance.usdt,
+        });
+        return;
       }
       withdrawAmount = requested;
     }
@@ -86,9 +93,9 @@ export async function withdraw(opts) {
         args: [mainWallet, withdrawAmount],
       });
 
-      console.error(`\nTransferring ${formatUnits(withdrawAmount, 18)} USDT → ${mainWallet}...`);
+      logInfo(`\nTransferring ${formatUnits(withdrawAmount, 18)} USDT → ${mainWallet}...`);
       usdtTxHash = await walletClient.sendTransaction({ to: USDT_BSC, data });
-      console.error(`USDT tx: ${usdtTxHash}`);
+      logInfo(`USDT tx: ${usdtTxHash}`);
 
       const receipt = await publicClient.waitForTransactionReceipt({
         hash: usdtTxHash,
@@ -97,10 +104,12 @@ export async function withdraw(opts) {
       if (receipt.status !== "success") {
         throw new Error("USDT transfer reverted");
       }
-      console.error("USDT reclaimed.");
+      logInfo("USDT reclaimed.");
     } catch (error) {
-      console.error(JSON.stringify({ error: `USDT withdraw failed: ${error.message}` }));
-      process.exit(1);
+      emitErr("withdraw", "WITHDRAW_FAILED", {
+        message: `USDT withdraw failed: ${error.message}`,
+      });
+      return;
     }
   }
 
@@ -118,14 +127,14 @@ export async function withdraw(opts) {
         const sendable = freshBalance.bnbRaw - gasCost;
 
         if (sendable > 0n) {
-          console.error(`Transferring ${formatUnits(sendable, 18)} BNB → ${mainWallet}...`);
+          logInfo(`Transferring ${formatUnits(sendable, 18)} BNB → ${mainWallet}...`);
           bnbTxHash = await walletClient.sendTransaction({
             to: mainWallet,
             value: sendable,
             gas: BNB_TRANSFER_GAS,
             gasPrice,
           });
-          console.error(`BNB tx: ${bnbTxHash}`);
+          logInfo(`BNB tx: ${bnbTxHash}`);
 
           const receipt = await publicClient.waitForTransactionReceipt({
             hash: bnbTxHash,
@@ -134,12 +143,12 @@ export async function withdraw(opts) {
           if (receipt.status !== "success") {
             throw new Error("BNB transfer reverted");
           }
-          console.error("BNB reclaimed.");
+          logInfo("BNB reclaimed.");
         } else {
-          console.error("BNB balance too small to cover transfer gas, skipping.");
+          logInfo("BNB balance too small to cover transfer gas, skipping.");
         }
       } catch (error) {
-        console.error(`Warning: BNB reclaim failed (${error.message}).`);
+        logInfo(`Warning: BNB reclaim failed (${error.message}).`);
       }
     }
   }
@@ -152,8 +161,7 @@ export async function withdraw(opts) {
     finalBalance = { usdt: "unknown", bnb: "unknown" };
   }
 
-  console.log(JSON.stringify({
-    success: true,
+  const data = {
     to: mainWallet,
     transactions: {
       usdt: usdtTxHash,
@@ -163,6 +171,6 @@ export async function withdraw(opts) {
       usdt: finalBalance.usdt,
       bnb: finalBalance.bnb,
     },
-  }, null, 2));
-  process.exit(0);
+  };
+  emitOk("withdraw", data, { success: true, ...data });
 }

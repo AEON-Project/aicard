@@ -16,7 +16,20 @@ npx skills add AEON-Project/aicard -a claude-code -a cursor -a codex -g -y
 
 Supported agents: Claude Code, Cursor, Codex, OpenClaw, Gemini CLI, GitHub Copilot, Windsurf, Roo Code, and [39+ more](https://agentskills.io).
 
-## CLI Usage
+## CLI Commands
+
+| Command | Description | Key Options |
+|---------|-------------|-------------|
+| `setup` | Pre-check: auto-create local wallet on first run, or show config | `--service-url`, `--show`, `--check` |
+| `create` | Create a virtual card by paying with USDT on BSC | `--amount` (required, $0.6 ~ $800), `--app-id` (default `TEST000001`), `--service-url`, `--private-key`, `--poll` |
+| `status` | Check virtual card creation status | `--order-no` (required), `--service-url`, `--poll` |
+| `wallet` | Check local wallet USDT balance on BSC | `--private-key` |
+| `topup` | Top up local wallet via WalletConnect (USDT + BNB for approve gas) | `--amount` (default `50`), `--skip-gas`, `--project-id` |
+| `gas` | Send BNB from main wallet to local wallet via WalletConnect (for withdraw gas) | `--amount` (default `0.001`), `--project-id` |
+| `withdraw` | Withdraw USDT from session key back to main wallet | `--amount` (default: all), `--to` |
+| `clean` | Remove skill, uninstall package, and clear npm/npx cache | — |
+
+### Examples
 
 ```bash
 # First run: auto-create local wallet (private key generated locally, never uploaded)
@@ -80,6 +93,48 @@ Override the default service URL (optional):
 ```bash
 npx @aeon-ai-pay/aicard setup --service-url https://custom-api.example.com
 ```
+
+## Developer Integration
+
+Building an agent product on top of `aicard`? Two integration paths:
+
+### Path A — Let the agent invoke the CLI directly
+
+For IDE-hosted agents (Claude Code, Cursor, Codex, Windsurf, …), install the skill (see [Install Skill](#install-skill)). The agent will invoke `aicard` via the shell when the user intent matches.
+
+### Path B — Spawn `aicard` from your own code
+
+For Node.js / Python / Go agent products that orchestrate the CLI as a subprocess:
+
+```js
+import { spawn } from "node:child_process";
+
+const child = spawn("aicard", ["--quiet", "create", "--amount", "5", "--poll"]);
+let stdout = "";
+child.stdout.on("data", (b) => { stdout += b; });
+child.on("close", (code) => {
+  const envelope = JSON.parse(stdout.trim().split("\n").pop());
+  if (envelope.ok) {
+    console.log("Card:", envelope.data);
+  } else {
+    console.error(`[${envelope.error.code}] ${envelope.error.message}`);
+  }
+});
+```
+
+- **Stdout** is always one line of JSON — the *envelope* (`{ ok, command, version, data }` or `{ ok, command, version, error }`).
+- **Stderr** is human-readable progress; pass `--quiet` to suppress.
+- **Exit code** is stable: `0` success, `1` user error, `2` timeout, `3` service/network, `4` internal.
+- **`--dry-run`** on `create` performs all preflight checks (402 fetch, balance, allowance) but skips signing/transacting — perfect for integration tests and smoke checks.
+- **`--legacy-output`** restores the pre-envelope JSON shape for legacy scripts during migration.
+
+Detailed references:
+
+- [docs/output-schema.md](docs/output-schema.md) — full envelope schema per command
+- [docs/exit-codes.md](docs/exit-codes.md) — exit code categories + `error.code` reference
+- [docs/recipes/integrate-in-agent.md](docs/recipes/integrate-in-agent.md) — Node.js & Python wrappers
+- [docs/recipes/error-recovery.md](docs/recipes/error-recovery.md) — code-by-code recovery strategy
+- [docs/recipes/cron-issue-cards.md](docs/recipes/cron-issue-cards.md) — scheduled card issuance
 
 ## License
 

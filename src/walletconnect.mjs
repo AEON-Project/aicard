@@ -12,6 +12,18 @@ import { createServer } from "http";
 import { WC_CONNECT_TIMEOUT_MS, ERC20_TRANSFER_ABI, DEFAULT_WC_PROJECT_ID } from "./constants.mjs";
 import { loadConfig, saveConfig } from "./config.mjs";
 
+/**
+ * WalletConnect 流程抛出的错误，携带稳定 error code（PAYMENT_TIMEOUT / PAYMENT_REJECTED / WALLET_ERROR）。
+ * Commands 层捕获后通过 emitErr 输出，无需关心底层细节。
+ */
+export class WalletConnectError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+    this.name = "WalletConnectError";
+  }
+}
+
 // ============== 状态同步服务器（供浏览器页面轮询） ==============
 
 let _status = { state: "waiting_scan" };
@@ -607,8 +619,7 @@ export async function withWallet(opts, fn) {
   const statusPort = await startStatusServer();
   let signClient = null;
   let session = null;
-  let exitCode = 0;
-  let errorPayload = null;
+  let walletError = null;
 
   try {
     signClient = await initSignClient(projectId);
@@ -629,15 +640,14 @@ export async function withWallet(opts, fn) {
 
     if (isTimeout) {
       setStatus("expired");
-      errorPayload = { error: "Payment approval timed out. Please try again." };
+      walletError = new WalletConnectError("PAYMENT_TIMEOUT", "Payment approval timed out. Please try again.");
     } else if (isRejected) {
       setStatus("rejected", { error: "Payment approval was rejected." });
-      errorPayload = { error: "Payment approval was rejected. Please try again if you'd like to proceed." };
+      walletError = new WalletConnectError("PAYMENT_REJECTED", "Payment approval was rejected. Please try again if you'd like to proceed.");
     } else {
       setStatus("failed", { error: error.message });
-      errorPayload = { error: `Wallet operation failed: ${error.message}` };
+      walletError = new WalletConnectError("WALLET_ERROR", `Wallet operation failed: ${error.message}`);
     }
-    exitCode = 1;
   } finally {
     await new Promise((r) => setTimeout(r, FINAL_LINGER_MS));
     stopStatusServer();
@@ -658,10 +668,7 @@ export async function withWallet(opts, fn) {
     }
   }
 
-  if (exitCode !== 0) {
-    console.error(JSON.stringify(errorPayload));
-    process.exit(exitCode);
-  }
+  if (walletError) throw walletError;
 }
 
 /**

@@ -11,6 +11,8 @@
     "src",
     "skills",
     "scripts",
+    "docs",
+    "templates",
     "README.md"
   ],
   "scripts": {

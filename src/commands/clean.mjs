@@ -2,9 +2,11 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
+import { emitOk, logInfo, logError } from "../output.mjs";
 
 export async function clean() {
   const home = homedir();
+  const removed = [];
 
   // 1. 用 skills CLI 移除（覆盖所有工具）
   try {
@@ -12,13 +14,15 @@ export async function clean() {
       stdio: "inherit",
       timeout: 30000,
     });
-    console.error("Removed aicard skill via skills CLI");
+    logInfo("Removed aicard skill via skills CLI");
+    removed.push("skills");
   } catch {
     // skills CLI 不可用，手动清理 Claude Code
     const skillDir = join(home, ".claude", "skills", "aicard");
     if (existsSync(skillDir)) {
       rmSync(skillDir, { recursive: true, force: true });
-      console.error("Removed skill:", skillDir);
+      logInfo(`Removed skill: ${skillDir}`);
+      removed.push(skillDir);
     }
   }
 
@@ -28,9 +32,10 @@ export async function clean() {
       stdio: "inherit",
       timeout: 30000,
     });
-    console.error("Uninstalled @aeon-ai-pay/aicard globally");
+    logInfo("Uninstalled @aeon-ai-pay/aicard globally");
+    removed.push("npm-global");
   } catch {
-    console.error("Global package not installed, skipping uninstall");
+    logInfo("Global package not installed, skipping uninstall");
   }
 
   // 3. 清理 npm 缓存
@@ -39,18 +44,22 @@ export async function clean() {
       stdio: "inherit",
       timeout: 30000,
     });
-    console.error("npm cache cleaned");
+    logInfo("npm cache cleaned");
+    removed.push("npm-cache");
   } catch {
-    console.error("Failed to clean npm cache, skipping");
+    logError("Failed to clean npm cache, skipping");
   }
 
   // 4. 清理 npx 缓存
   const npxCache = join(home, ".npm", "_npx");
   if (existsSync(npxCache)) {
     rmSync(npxCache, { recursive: true, force: true });
-    console.error("Removed npx cache:", npxCache);
+    logInfo(`Removed npx cache: ${npxCache}`);
+    removed.push("npx-cache");
   }
 
-  console.error("\nClean complete. Reinstall with:");
-  console.error("  npm install -g @aeon-ai-pay/aicard@latest");
+  logInfo("\nClean complete. Reinstall with:");
+  logInfo("  npm install -g @aeon-ai-pay/aicard@latest");
+
+  emitOk("clean", { removed }, { success: true, removed });
 }

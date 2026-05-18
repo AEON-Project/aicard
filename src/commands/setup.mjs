@@ -1,5 +1,6 @@
 import { loadConfig, saveConfig, getConfigPath } from "../config.mjs";
 import { MIN_AMOUNT, MAX_AMOUNT } from "../constants.mjs";
+import { emitOk, emitErr } from "../output.mjs";
 
 export async function setup(opts) {
   const config = loadConfig();
@@ -33,7 +34,7 @@ export async function setup(opts) {
     }
 
     const ready = !!(config.serviceUrl && config.privateKey);
-    const result = {
+    const data = {
       ready,
       created,
       mode: config.mode || null,
@@ -42,8 +43,8 @@ export async function setup(opts) {
       serviceUrl: config.serviceUrl || null,
       amountLimits: { min: MIN_AMOUNT, max: MAX_AMOUNT },
     };
-    console.log(JSON.stringify(result));
-    process.exit(ready ? 0 : 1);
+    emitOk("setup.check", data, data);
+    return;
   }
 
   if (opts.show) {
@@ -53,24 +54,24 @@ export async function setup(opts) {
       display.privateKey = `${display.privateKey.slice(0, 6)}...${display.privateKey.slice(-4)}`;
     }
     display._configPath = getConfigPath();
-    console.log(JSON.stringify(display, null, 2));
+    emitOk("setup.show", display, display);
     return;
   }
 
   if (!changed) {
-    console.error("Usage:");
-    console.error("  aicard setup --check                  (auto-create local wallet if missing)");
-    console.error("  aicard setup --show                   (show current config)");
-    console.error("  aicard setup --service-url <url>      (override service URL)");
-    console.error(`\nConfig file: ${getConfigPath()}`);
-    process.exit(1);
+    emitErr("setup", "INVALID_USAGE", {
+      message: "Usage: aicard setup --check | --show | --service-url <url>",
+      configPath: getConfigPath(),
+    });
+    return;
   }
 
   saveConfig(config);
-  console.log(JSON.stringify({
+  const data = {
     success: true,
     configPath: getConfigPath(),
     serviceUrl: config.serviceUrl || null,
     address: config.address || null,
-  }, null, 2));
+  };
+  emitOk("setup", data, data);
 }

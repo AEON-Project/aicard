@@ -12,52 +12,66 @@ import {
   requestERC20Transfer,
   requestNativeTransfer,
   setStatus,
+  WalletConnectError,
 } from "../walletconnect.mjs";
+import { emitOk, emitErr, logInfo } from "../output.mjs";
 
 const AUTO_GAS_BNB = "0.0003";
 
 export async function create(opts) {
-  console.error("Creating Agent Card...");
+  logInfo("Creating Agent Card...");
   const serviceUrl = resolve(opts.serviceUrl, "AGENT_PAY_SERVICE_URL", "serviceUrl");
   const privateKey = resolve(opts.privateKey, "EVM_PRIVATE_KEY", "privateKey");
-  const { amount, poll } = opts;
+  const { amount, poll, appId, dryRun } = opts;
   const amountNum = parseFloat(amount);
 
   // 1. 参数校验
   if (!serviceUrl) {
-    console.error(JSON.stringify({ error: "Missing service URL. This should not happen — default is built-in. Run: aicard setup --service-url <url> to override." }));
-    process.exit(1);
+    emitErr("create", "SERVICE_URL_MISSING", {
+      message: "Missing service URL. This should not happen — default is built-in. Run: aicard setup --service-url <url> to override.",
+    });
+    return;
   }
   if (!privateKey) {
-    console.error(JSON.stringify({ error: "Wallet not configured. Run: aicard setup --check" }));
-    process.exit(1);
+    emitErr("create", "WALLET_NOT_CONFIGURED");
+    return;
   }
   // 2. 限额校验
   if (isNaN(amountNum) || amountNum < MIN_AMOUNT) {
-    console.error(JSON.stringify({ error: `Amount must be at least $${MIN_AMOUNT}. Allowed range: $${MIN_AMOUNT} ~ $${MAX_AMOUNT} USD.`, min: MIN_AMOUNT, max: MAX_AMOUNT }));
-    process.exit(1);
+    emitErr("create", "AMOUNT_OUT_OF_RANGE", {
+      message: `Amount must be at least $${MIN_AMOUNT}. Allowed range: $${MIN_AMOUNT} ~ $${MAX_AMOUNT} USD.`,
+      min: MIN_AMOUNT,
+      max: MAX_AMOUNT,
+    });
+    return;
   }
   if (amountNum > MAX_AMOUNT) {
-    console.error(JSON.stringify({ error: `Amount must not exceed $${MAX_AMOUNT}. Allowed range: $${MIN_AMOUNT} ~ $${MAX_AMOUNT} USD.`, min: MIN_AMOUNT, max: MAX_AMOUNT }));
-    process.exit(1);
+    emitErr("create", "AMOUNT_OUT_OF_RANGE", {
+      message: `Amount must not exceed $${MAX_AMOUNT}. Allowed range: $${MIN_AMOUNT} ~ $${MAX_AMOUNT} USD.`,
+      min: MIN_AMOUNT,
+      max: MAX_AMOUNT,
+    });
+    return;
   }
 
   // 3. 第一次请求 x402，获取实际付款要求（带唯一后缀的真实 USDT 金额）
-  const url = `${serviceUrl}/open/ai/x402/card/create?amount=${encodeURIComponent(amount)}`;
-  console.error("Fetching payment requirements...");
+  const url = `${serviceUrl}/open/ai/x402/card/create?amount=${encodeURIComponent(amount)}&appId=${encodeURIComponent(appId)}`;
+  logInfo("Fetching payment requirements...");
   let requiredUsdt;
   let paymentReq;
   try {
     paymentReq = await fetchPaymentRequirements(url);
     requiredUsdt = paymentReq.amountUsdt;
-    console.error(`Required: ${requiredUsdt} USDT (pay to ${paymentReq.payTo})`);
+    logInfo(`Required: ${requiredUsdt} USDT (pay to ${paymentReq.payTo})`);
   } catch (e) {
-    console.error(JSON.stringify({ error: `Failed to fetch payment requirements: ${e.message}` }));
-    process.exit(1);
+    emitErr("create", "PAYMENT_FETCH_FAILED", {
+      message: `Failed to fetch payment requirements: ${e.message}`,
+    });
+    return;
   }
 
   // 4. 前置检查：预授权 → USDT 余额
-  console.error("Checking wallet...");
+  logInfo("Checking wallet...");
   let needTopup = false;
   let needGas = false;
   let sessionAddress;
@@ -68,27 +82,29 @@ export async function create(opts) {
     sessionAddress = address;
     const usdtNum = parseFloat(usdt);
 
-    console.error(`Wallet: ${address}`);
-    console.error(`Balance: ${usdt} USDT, ${bnb} BNB`);
+    logInfo(`Wallet: ${address}`);
+    logInfo(`Balance: ${usdt} USDT, ${bnb} BNB`);
 
     // 1. 检查预授权额度（是否已对 facilitator 做过无限额度 approve）
     const allowance = await getAllowance(address);
     const requiredWei = BigInt(paymentReq.amountWei);
-    console.error(`Allowance: ${allowance.toString()} wei, Required: ${requiredWei.toString()} wei`);
+    logInfo(`Allowance: ${allowance.toString()} wei, Required: ${requiredWei.toString()} wei`);
     if (requiredWei === 0n) {
-      console.error(JSON.stringify({ error: "Server returned invalid payment amount (0). Please retry later." }));
-      process.exit(1);
+      emitErr("create", "INVALID_PAYMENT_AMOUNT", {
+        message: "Server returned invalid payment amount (0). Please retry later.",
+      });
+      return;
     }
     if (allowance >= requiredWei) {
-      console.error("Allowance sufficient, no approve needed.");
+      logInfo("Allowance sufficient, no approve needed.");
     } else {
       // 预授权不足，需要 approve（消耗 BNB gas）
-      console.error(`Approve authorization insufficient (allowance ${allowance} < required ${requiredWei}), need approve.`);
+      logInfo(`Approve authorization insufficient (allowance ${allowance} < required ${requiredWei}), need approve.`);
       if (bnbRaw === 0n) {
         needGas = true;
-        console.error("No BNB for approve gas, will request BNB transfer.");
+        logInfo("No BNB for approve gas, will request BNB transfer.");
       } else {
-        console.error(`BNB available for approve gas (${bnb} BNB).`);
+        logInfo(`BNB available for approve gas (${bnb} BNB).`);
       }
     }
 
@@ -97,60 +113,99 @@ export async function create(opts) {
       needTopup = true;
       const shortfall = requiredUsdt - usdtNum;
       topupAmount = shortfall.toFixed(6);
-      console.error(`USDT insufficient: have ${usdtNum}, need ${requiredUsdt}, shortfall ${topupAmount}`);
+      logInfo(`USDT insufficient: have ${usdtNum}, need ${requiredUsdt}, shortfall ${topupAmount}`);
     } else {
-      console.error(`USDT sufficient: have ${usdtNum}, need ${requiredUsdt}`);
+      logInfo(`USDT sufficient: have ${usdtNum}, need ${requiredUsdt}`);
     }
 
-    console.error(`Decision: needTopup=${needTopup}, needGas=${needGas}${topupAmount ? `, topupAmount=${topupAmount}` : ""}`);
+    logInfo(`Decision: needTopup=${needTopup}, needGas=${needGas}${topupAmount ? `, topupAmount=${topupAmount}` : ""}`);
 
   } catch (e) {
-    console.error(JSON.stringify({ error: `Balance check failed: ${e.message}` }));
-    process.exit(1);
+    emitErr("create", "BALANCE_CHECK_FAILED", {
+      message: `Balance check failed: ${e.message}`,
+    });
+    return;
+  }
+
+  // Dry-run：跑完前置检查，预演接下来会做什么，不签名/不上链/不打开 WalletConnect
+  if (dryRun) {
+    const will = [];
+    if (needTopup) will.push("fund_usdt_via_walletconnect");
+    if (needGas) will.push("fund_bnb_via_walletconnect");
+    will.push("approve_or_skip", "sign_payment_eip712", "submit_to_facilitator");
+    if (poll) will.push("poll_status");
+
+    const preview = {
+      dryRun: true,
+      url,
+      paymentRequirements: {
+        amountUsdt: requiredUsdt,
+        amountWei: paymentReq.amountWei,
+        asset: paymentReq.asset,
+        payTo: paymentReq.payTo,
+        orderNo: paymentReq.orderNo,
+      },
+      wallet: { address: sessionAddress },
+      decision: { needTopup, needGas, topupAmount },
+      will,
+    };
+    emitOk("create", preview, { success: true, ...preview });
+    return;
   }
 
   // 余额不足：通过 WalletConnect 内联充值
   if (needTopup || needGas) {
-    console.error("Funding flow triggered...");
-    await inlineWalletConnectTopup({
-      sessionAddress,
-      amount: needTopup ? topupAmount : null,
-      needGas,
-    });
+    logInfo("Funding flow triggered...");
+    try {
+      await inlineWalletConnectTopup({
+        sessionAddress,
+        amount: needTopup ? topupAmount : null,
+        needGas,
+      });
+    } catch (e) {
+      if (e instanceof WalletConnectError) {
+        emitErr("create", e.code, { message: e.message });
+      } else {
+        emitErr("create", "INTERNAL_ERROR", { message: e.message });
+      }
+      return;
+    }
 
     // 充值完成后重新检查余额
-    console.error("Re-checking wallet balance...");
+    logInfo("Re-checking wallet balance...");
     try {
       const { usdt, bnb, bnbRaw } = await getWalletBalance(privateKey);
       const usdtNum = parseFloat(usdt);
-      console.error(`Balance: ${usdt} USDT, ${bnb} BNB`);
+      logInfo(`Balance: ${usdt} USDT, ${bnb} BNB`);
 
       if (needGas && bnbRaw === 0n) {
-        console.error(JSON.stringify({
-          error: "No BNB for approve transaction after funding. Run 'aicard gas' to add BNB manually.",
+        emitErr("create", "INSUFFICIENT_BNB", {
+          message: "No BNB for approve transaction after funding. Run 'aicard gas' to add BNB manually.",
           address: sessionAddress,
-        }));
-        process.exit(1);
+        });
+        return;
       }
       if (usdtNum < requiredUsdt) {
-        console.error(JSON.stringify({
-          error: `Still insufficient USDT after funding.`,
+        emitErr("create", "INSUFFICIENT_USDT", {
+          message: "Still insufficient USDT after funding.",
           required: `${requiredUsdt} USDT`,
           available: `${usdt} USDT`,
           address: sessionAddress,
-        }));
-        process.exit(1);
+        });
+        return;
       }
     } catch (e) {
-      console.error(JSON.stringify({ error: `Balance re-check failed: ${e.message}` }));
-      process.exit(1);
+      emitErr("create", "BALANCE_CHECK_FAILED", {
+        message: `Balance re-check failed: ${e.message}`,
+      });
+      return;
     }
   }
 
   // 5. 用第一次 402 响应手动签名并提交（避免二次请求产生不同金额）
-  const { client, address, api } = createX402Api(privateKey);
+  const { client } = createX402Api(privateKey);
 
-  console.error(`Creating card: $${amount} USD via ${url}`);
+  logInfo(`Creating card: $${amount} USD via ${url}`);
 
   try {
     const { x402HTTPClient } = await import("@aeon-ai-pay/core/client");
@@ -175,14 +230,12 @@ export async function create(opts) {
     const paymentResponse = decodePaymentResponse(response.headers);
     const orderNo = paymentReq.orderNo || response.data?.model?.orderNo || response.data?.orderNo;
 
-    const result = {
-      success: true,
+    const sanitizedData = sanitizeOutput(response.data);
+    const successData = {
       orderNo,
-      data: sanitizeOutput(response.data),
+      data: sanitizedData,
       paymentResponse,
     };
-
-    console.log(JSON.stringify(result, null, 2));
 
     // 在整个响应中递归查找 cardStatus
     function findCardStatus(obj) {
@@ -196,24 +249,32 @@ export async function create(opts) {
     }
     const initialOrderStatus = response.data?.model?.orderStatus;
     const initialCardStatus = findCardStatus(response.data);
-    if (initialOrderStatus === "SUCCESS" || initialOrderStatus === "FAIL" || initialCardStatus === "ACTIVE") {
-      console.error(`Card ready (orderStatus=${initialOrderStatus}, cardStatus=${initialCardStatus}), no polling needed.`);
-    } else if (poll && orderNo) {
-      console.error(`\nPolling status for orderNo: ${orderNo}`);
-      await pollStatus(serviceUrl, orderNo);
-    } else if (poll && !orderNo) {
-      console.error("Warning: No orderNo available for polling. Query status manually.");
+    const cardReady = initialOrderStatus === "SUCCESS" || initialOrderStatus === "FAIL" || initialCardStatus === "ACTIVE";
+
+    if (cardReady) {
+      logInfo(`Card ready (orderStatus=${initialOrderStatus}, cardStatus=${initialCardStatus}), no polling needed.`);
+      emitOk("create", successData, { success: true, ...successData });
+      return;
     }
-    process.exit(0);
+
+    if (poll && orderNo) {
+      logInfo(`\nPolling status for orderNo: ${orderNo}`);
+      const pollResult = await pollStatus(serviceUrl, orderNo);
+      successData.pollResult = pollResult;
+      emitOk("create", successData, { success: true, ...successData, pollResult });
+      return;
+    }
+
+    if (poll && !orderNo) {
+      logInfo("Warning: No orderNo available for polling. Query status manually.");
+    }
+    emitOk("create", successData, { success: true, ...successData });
   } catch (error) {
-    const result = {
-      success: false,
+    emitErr("create", "PAYMENT_FAILED", {
+      message: error.message,
       status: error.response?.status,
       data: error.response?.data,
-      error: error.message,
-    };
-    console.error(JSON.stringify(result, null, 2));
-    process.exit(1);
+    });
   }
 }
 
@@ -237,8 +298,8 @@ async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
     // USDT 充值
     if (amount) {
       setStatus("signing", { amount, token: "USDT", to: sessionAddress });
-      console.error(`\nRequesting USDT transfer: ${amount} USDT → ${sessionAddress}`);
-      console.error("Please confirm the transaction in your wallet app...");
+      logInfo(`\nRequesting USDT transfer: ${amount} USDT → ${sessionAddress}`);
+      logInfo("Please confirm the transaction in your wallet app...");
 
       const usdtTxHash = await requestERC20Transfer(signClient, session, {
         from: peerAddress,
@@ -248,8 +309,8 @@ async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
         decimals: 18,
       });
       setStatus("tx_submitted", { txHash: usdtTxHash, amount, token: "USDT" });
-      console.error(`USDT transfer submitted: ${usdtTxHash}`);
-      console.error("Waiting for confirmation...");
+      logInfo(`USDT transfer submitted: ${usdtTxHash}`);
+      logInfo("Waiting for confirmation...");
 
       const receipt = await publicClient.waitForTransactionReceipt({
         hash: usdtTxHash,
@@ -258,7 +319,7 @@ async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
       if (receipt.status !== "success") {
         throw new Error("USDT transfer transaction reverted");
       }
-      console.error("USDT transfer confirmed.");
+      logInfo("USDT transfer confirmed.");
     }
 
     // BNB gas 充值
@@ -267,25 +328,25 @@ async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
       try {
         const activeSessions = signClient.session.getAll();
         const sessionAlive = activeSessions.some(s => s.topic === session.topic);
-        console.error(`[WC session] alive=${sessionAlive}, topic=${session.topic}, active_sessions=${activeSessions.length}`);
+        logInfo(`[WC session] alive=${sessionAlive}, topic=${session.topic}, active_sessions=${activeSessions.length}`);
         if (!sessionAlive) {
           throw new Error("WalletConnect session expired between USDT and BNB transfers. Run 'aicard gas' to add BNB manually.");
         }
       } catch (e) {
         if (e.message.includes("session expired")) throw e;
-        console.error(`[WC session] health check error: ${e.message}`);
+        logInfo(`[WC session] health check error: ${e.message}`);
       }
 
       setStatus("signing", { amount: AUTO_GAS_BNB, token: "BNB", to: sessionAddress });
-      console.error(`\nRequesting BNB transfer: ${AUTO_GAS_BNB} BNB → ${sessionAddress} (for approve gas)`);
-      console.error("Please confirm the transaction in your wallet app...");
+      logInfo(`\nRequesting BNB transfer: ${AUTO_GAS_BNB} BNB → ${sessionAddress} (for approve gas)`);
+      logInfo("Please confirm the transaction in your wallet app...");
       const bnbTxHash = await requestNativeTransfer(signClient, session, {
         from: peerAddress,
         to: sessionAddress,
         value: AUTO_GAS_BNB,
       });
       setStatus("tx_submitted", { txHash: bnbTxHash, amount: AUTO_GAS_BNB, token: "BNB" });
-      console.error(`BNB transfer submitted: ${bnbTxHash}`);
+      logInfo(`BNB transfer submitted: ${bnbTxHash}`);
       const bnbReceipt = await publicClient.waitForTransactionReceipt({
         hash: bnbTxHash,
         timeout: 60_000,
@@ -293,7 +354,7 @@ async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
       if (bnbReceipt.status !== "success") {
         throw new Error("BNB transfer reverted");
       }
-      console.error("BNB transfer confirmed.");
+      logInfo("BNB transfer confirmed.");
     }
 
     setStatus("confirmed", { token: amount ? "USDT" : "BNB" });
@@ -309,18 +370,18 @@ async function pollStatus(serviceUrl, orderNo) {
     }
     try {
       const res = await axios.get(
-        `${serviceUrl}/open/ai/x402/card/status?orderNo=${encodeURIComponent(orderNo)}`
+        `${serviceUrl}/open/ai/x402/card/status?orderNo=${encodeURIComponent(orderNo)}`,
       );
       const model = res.data?.model;
-      console.error(`[${i}/${MAX_POLLS}] orderStatus=${model?.orderStatus} channelStatus=${model?.channelStatus}`);
+      logInfo(`[${i}/${MAX_POLLS}] orderStatus=${model?.orderStatus} channelStatus=${model?.channelStatus}`);
 
       if (model?.orderStatus === "SUCCESS" || model?.orderStatus === "FAIL" || model?.cardStatus === "ACTIVE") {
-        console.log(JSON.stringify({ pollResult: sanitizeOutput(model) }, null, 2));
-        return;
+        return sanitizeOutput(model);
       }
     } catch (e) {
-      console.error(`[${i}/${MAX_POLLS}] Poll error: ${e.message}`);
+      logInfo(`[${i}/${MAX_POLLS}] Poll error: ${e.message}`);
     }
   }
-  console.error(`Polling timeout after ${MAX_POLLS} attempts. Check manually with: aicard status --order-no ${orderNo}`);
+  logInfo(`Polling timeout after ${MAX_POLLS} attempts. Check manually with: aicard status --order-no ${orderNo}`);
+  return null;
 }

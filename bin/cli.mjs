@@ -24,6 +24,7 @@ process.on("uncaughtException", (err) => {
 
 import { Command } from "commander";
 import { checkForUpdates } from "../src/update-check.mjs";
+import { setLegacyMode, setVerboseMode, setQuietMode } from "../src/output.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -37,7 +38,16 @@ const program = new Command();
 program
   .name("aicard")
   .description("Purchase virtual debit cards via x402 protocol")
-  .version(CURRENT_VERSION);
+  .version(CURRENT_VERSION)
+  .option("--legacy-output", "Emit legacy JSON shape instead of the new envelope", false)
+  .option("--verbose", "Verbose stderr logs", false)
+  .option("--quiet", "Suppress non-error stderr logs", false)
+  .hook("preAction", (thisCommand) => {
+    const opts = thisCommand.opts();
+    setLegacyMode(opts.legacyOutput);
+    setVerboseMode(opts.verbose);
+    setQuietMode(opts.quiet);
+  });
 
 program
   .command("setup")
@@ -54,9 +64,11 @@ program
   .command("create")
   .description("Create a virtual card by paying with USDT on BSC")
   .requiredOption("--amount <usd>", "Card amount in USD ($0.6 ~ $800)")
+  .option("--app-id <id>", "Merchant app ID", "TEST000001")
   .option("--service-url <url>", "Override service URL")
   .option("--private-key <key>", "Override EVM private key")
   .option("--poll", "Auto-poll status after creation", false)
+  .option("--dry-run", "Run all preflight checks but do not sign/transact", false)
   .action(async (opts) => {
     const { create } = await import("../src/commands/create.mjs");
     return create(opts);

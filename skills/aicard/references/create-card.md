@@ -27,10 +27,15 @@ Once the user specifies an amount, **execute immediately** — no second confirm
 ```bash
 # Create card and auto-poll status
 npx @aeon-ai-pay/aicard create --amount <amount> --poll
+
+# Optional: specify merchant app ID (defaults to TEST000001)
+npx @aeon-ai-pay/aicard create --amount <amount> --app-id <merchantAppId> --poll
 ```
 
+> `--app-id` is the merchant identifier sent with the request; defaults to `TEST000001` when omitted.
+
 CLI automatically handles the full flow:
-1. Send `GET /open/ai/x402/card/create?amount=X` → receive HTTP 402 + payment requirements (exact USDT amount)
+1. Send `GET /open/ai/x402/card/create?amount=X&appId=Y` → receive HTTP 402 + payment requirements (exact USDT amount)
 2. Check allowance → if insufficient and no BNB, mark BNB needed
 3. Check USDT balance → if insufficient, mark top-up needed
 4. If top-up or BNB needed → auto-initiate WalletConnect funding (opens QR page, waits for user to confirm in wallet app)

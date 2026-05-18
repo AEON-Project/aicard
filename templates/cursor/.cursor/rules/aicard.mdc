@@ -1,0 +1,60 @@
+---
+description: Use the aicard CLI to create and manage one-time virtual debit cards via the x402 payment protocol on BSC. Trigger on intents like "create a card", "buy a virtual card", "card status", "top up", "withdraw funds".
+alwaysApply: false
+---
+
+# aicard — Virtual Card via x402
+
+Use this rule when the user wants to **create, query, or manage** one-time-use virtual debit cards funded via USDT on BSC.
+
+## First-time setup (always run once)
+
+```bash
+aicard setup --check
+```
+
+Auto-creates a local session wallet if missing. Returns an envelope; `envelope.data.ready === true` means ready.
+
+## Commands
+
+| Intent | Command |
+| --- | --- |
+| Create a $N card and poll until ready | `aicard create --amount <N> --poll` |
+| Specify merchant app ID (optional) | `aicard create --amount <N> --app-id <merchantId> --poll` |
+| Check status of an existing order | `aicard status --order-no <orderNo>` |
+| Show local wallet balance | `aicard wallet` |
+| Top up USDT from main wallet (interactive WalletConnect) | `aicard topup --amount <USDT>` |
+| Top up BNB for gas (interactive WalletConnect) | `aicard gas --amount <BNB>` |
+| Withdraw funds back to main wallet | `aicard withdraw [--to 0x...] [--amount <USDT>]` |
+
+## Output Contract
+
+Every command writes **one line of JSON** to stdout: the envelope.
+
+- Success: `{ "ok": true, "command": "...", "data": { ... } }`
+- Failure: `{ "ok": false, "command": "...", "error": { "code": "...", "message": "...", ... } }`
+
+Stderr is human-readable progress; pass `--quiet` if you want it suppressed.
+
+## Error Handling
+
+Branch on `error.code` (stable). Common cases:
+
+- `AMOUNT_OUT_OF_RANGE` — Show valid range from `error.min` / `error.max`, ask user.
+- `INSUFFICIENT_USDT` / `INSUFFICIENT_BNB` — Run `aicard topup` / `aicard gas` then retry.
+- `PAYMENT_REJECTED` / `PAYMENT_TIMEOUT` — User cancelled or didn't respond. **Do not auto-retry**; ask first.
+- `POLL_TIMEOUT` — Card may still be provisioning. Note the `orderNo`, query later.
+- Exit codes: `0` success, `1` user error, `2` timeout, `3` service/network, `4` internal.
+
+## Hard Rules
+
+- **Never** ask the user for a private key — the local wallet is auto-generated.
+- **Never** display the full card number, CVV, or expiry. Output already redacts these to `•••• 1234`.
+- **Never** run `create` / `topup` / `gas` in the background — they may open a WalletConnect QR window that needs user attention.
+- **Never** auto-retry rejected / timed-out signatures.
+
+## Full Reference
+
+- Envelope schema: `docs/output-schema.md`
+- Exit / error codes: `docs/exit-codes.md`
+- Integration recipes: `docs/recipes/`

@@ -1,0 +1,48 @@
+# aicard — Virtual Card via x402
+
+When the user wants to create / query / manage a one-time virtual debit card funded with USDT on BSC, use the `aicard` CLI.
+
+## First-time setup (always run once)
+
+```bash
+aicard setup --check
+```
+
+`envelope.data.ready === true` means ready.
+
+## Commands
+
+| Intent | Command |
+| --- | --- |
+| Create a $N card and poll until ready | `aicard create --amount <N> --poll` |
+| Specify merchant app ID | `aicard create --amount <N> --app-id <merchantId> --poll` |
+| Check status of an existing order | `aicard status --order-no <orderNo>` |
+| Show local wallet balance | `aicard wallet` |
+| Top up USDT (interactive WalletConnect) | `aicard topup --amount <USDT>` |
+| Top up BNB for gas (interactive WalletConnect) | `aicard gas --amount <BNB>` |
+| Withdraw funds back to main wallet | `aicard withdraw [--to 0x...] [--amount <USDT>]` |
+
+## Output Contract
+
+Every command emits one line of JSON to stdout (the envelope):
+
+- Success: `{ "ok": true, "command": "...", "data": { ... } }`
+- Failure: `{ "ok": false, "command": "...", "error": { "code": "...", "message": "...", ... } }`
+
+Branch on `error.code` (stable). Exit codes: `0` success, `1` user, `2` timeout, `3` service/network, `4` internal.
+
+## Hard Rules
+
+- Never ask for a private key. The local wallet is auto-generated.
+- Never display full card numbers, CVV, or expiry — output is already sanitized.
+- Never run `create` / `topup` / `gas` in the background; they open a QR window requiring user attention.
+- Never auto-retry `PAYMENT_REJECTED` / `PAYMENT_TIMEOUT`.
+
+## Common Recovery
+
+- `AMOUNT_OUT_OF_RANGE` → Show `error.min` / `error.max`, ask for a new amount.
+- `INSUFFICIENT_USDT` → Run `aicard topup`, then retry create.
+- `INSUFFICIENT_BNB` → Run `aicard gas`, then retry the failing op.
+- `POLL_TIMEOUT` → Note `orderNo`, ask user to query later with `aicard status --order-no <orderNo>`.
+
+Full reference: `docs/output-schema.md`, `docs/exit-codes.md`, `docs/recipes/`.

@@ -1,12 +1,13 @@
 import { resolve, loadConfig } from "../config.mjs";
 import { getWalletBalance, getBalanceByAddress } from "../balance.mjs";
+import { emitOk, emitErr, logInfo } from "../output.mjs";
 
 export async function wallet(opts) {
   const privateKey = resolve(opts.privateKey, "EVM_PRIVATE_KEY", "privateKey");
 
   if (!privateKey) {
-    console.error(JSON.stringify({ error: "Wallet not configured. Run: aicard setup --check" }));
-    process.exit(1);
+    emitErr("wallet", "WALLET_NOT_CONFIGURED");
+    return;
   }
 
   try {
@@ -33,13 +34,12 @@ export async function wallet(opts) {
       }
     }
 
-    console.log(JSON.stringify(result, null, 2));
+    emitOk("wallet", result, result);
 
     if (usdtRaw === 0n) {
-      console.error("Warning: No USDT balance. Run 'aicard topup --amount <usdt>' to add funds.");
+      logInfo("Warning: No USDT balance. Run 'aicard topup --amount <usdt>' to add funds.");
     }
   } catch (error) {
-    console.error(JSON.stringify({ error: error.message }));
-    process.exit(1);
+    emitErr("wallet", "BALANCE_CHECK_FAILED", { message: error.message });
   }
 }

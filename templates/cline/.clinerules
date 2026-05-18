@@ -1,0 +1,53 @@
+# aicard — Virtual Card via x402
+
+Trigger this rule when the user wants to create / query / manage one-time virtual debit cards funded via USDT on BSC.
+
+## Setup (run once)
+
+```bash
+aicard setup --check
+```
+
+`envelope.data.ready === true` means ready.
+
+## Commands
+
+```bash
+aicard create --amount <USD> --poll                      # Create card, poll until ready
+aicard create --amount <USD> --app-id <merchantId> --poll # With merchant app ID
+aicard status --order-no <orderNo>                       # Single status query
+aicard status --order-no <orderNo> --poll                # Poll until terminal
+aicard wallet                                            # Show local wallet balance
+aicard topup --amount <USDT>                             # WalletConnect: USDT top-up
+aicard gas --amount <BNB>                                # WalletConnect: BNB gas top-up
+aicard withdraw [--to 0x...] [--amount <USDT>]           # Reclaim funds
+```
+
+## Envelope
+
+stdout = one line of JSON.
+
+- Success: `{ "ok": true, "command": ..., "data": { ... } }`
+- Failure: `{ "ok": false, "command": ..., "error": { "code": ..., "message": ..., ... } }`
+
+Branch on `error.code`. Exit codes: `0`/`1`/`2`/`3`/`4` = success/user/timeout/service/internal.
+
+## Hard Rules
+
+- No private keys from the user.
+- No full card numbers, CVV, or expiry in output (already sanitized).
+- WalletConnect-opening commands (`create` when underfunded / `topup` / `gas`) must run in foreground.
+- No auto-retry on `PAYMENT_REJECTED` or `PAYMENT_TIMEOUT`.
+
+## Recovery Cheatsheet
+
+| Code | Action |
+| --- | --- |
+| `AMOUNT_OUT_OF_RANGE` | Show `error.min`/`error.max`; ask user. |
+| `INSUFFICIENT_USDT` | `aicard topup` then retry. |
+| `INSUFFICIENT_BNB` | `aicard gas` then retry. |
+| `POLL_TIMEOUT` | Note `orderNo`; query later. |
+| `PAYMENT_REJECTED` / `PAYMENT_TIMEOUT` | Ask user before retrying. |
+| `SERVICE_UNAVAILABLE` | Exponential backoff retry. |
+
+Full reference: `docs/output-schema.md`, `docs/exit-codes.md`, `docs/recipes/`.

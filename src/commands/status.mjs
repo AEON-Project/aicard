@@ -1,6 +1,7 @@
 import { resolve } from "../config.mjs";
 import { POLL_INTERVAL, MAX_POLLS } from "../constants.mjs";
 import { sanitizeOutput } from "../sanitize.mjs";
+import { emitOk, emitErr, logInfo } from "../output.mjs";
 
 export async function status(opts) {
   const { default: axios } = await import("axios");
@@ -8,8 +9,10 @@ export async function status(opts) {
   const { orderNo, poll } = opts;
 
   if (!serviceUrl) {
-    console.error(JSON.stringify({ error: "Missing service URL. This should not happen — default is built-in. Run: aicard setup --service-url <url> to override." }));
-    process.exit(1);
+    emitErr("status", "SERVICE_URL_MISSING", {
+      message: "Missing service URL. This should not happen — default is built-in. Run: aicard setup --service-url <url> to override.",
+    });
+    return;
   }
 
   const url = `${serviceUrl}/open/ai/x402/card/status?orderNo=${encodeURIComponent(orderNo)}`;
@@ -17,36 +20,37 @@ export async function status(opts) {
   if (!poll) {
     try {
       const res = await axios.get(url);
-      console.log(JSON.stringify(sanitizeOutput(res.data), null, 2));
+      const sanitized = sanitizeOutput(res.data);
+      emitOk("status", sanitized, sanitized);
     } catch (error) {
-      console.error(JSON.stringify({
-        error: error.message,
+      emitErr("status", "SERVICE_UNAVAILABLE", {
+        message: error.message,
         status: error.response?.status,
         data: error.response?.data,
-      }));
-      process.exit(1);
+      });
     }
     return;
   }
 
   // 轮询模式
-  console.error(`Polling ${url} every ${POLL_INTERVAL / 1000}s (max ${MAX_POLLS} times)`);
+  logInfo(`Polling ${url} every ${POLL_INTERVAL / 1000}s (max ${MAX_POLLS} times)`);
 
   for (let i = 1; i <= MAX_POLLS; i++) {
     try {
       const res = await axios.get(url);
       const model = res.data?.model;
 
-      console.error(
-        `[${i}/${MAX_POLLS}] orderStatus=${model?.orderStatus} channelStatus=${model?.channelStatus} cardStatus=${model?.cardStatus || "-"}`
+      logInfo(
+        `[${i}/${MAX_POLLS}] orderStatus=${model?.orderStatus} channelStatus=${model?.channelStatus} cardStatus=${model?.cardStatus || "-"}`,
       );
 
       if (model?.orderStatus === "SUCCESS" || model?.orderStatus === "FAIL") {
-        console.log(JSON.stringify(sanitizeOutput(res.data), null, 2));
+        const sanitized = sanitizeOutput(res.data);
+        emitOk("status", sanitized, sanitized);
         return;
       }
     } catch (e) {
-      console.error(`[${i}/${MAX_POLLS}] Error: ${e.message}`);
+      logInfo(`[${i}/${MAX_POLLS}] Error: ${e.message}`);
     }
 
     if (i < MAX_POLLS) {
@@ -54,6 +58,8 @@ export async function status(opts) {
     }
   }
 
-  console.error("Polling timeout. Card may still be provisioning.");
-  process.exit(2);
+  emitErr("status", "POLL_TIMEOUT", {
+    orderNo,
+    message: "Polling timeout. Card may still be provisioning.",
+  });
 }
