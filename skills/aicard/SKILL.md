@@ -13,9 +13,11 @@ description: >
   - "show me what's available"
   - "what can I do?"
   - "what can I use the card for"
+  - "buy <product> / shop online / order something / find me <product> under $X"
 
   Also, any request involving the creation of a one-time-use virtual Visa/Mastercard
-  funded with cryptocurrency for agent use.
+  funded with cryptocurrency for agent use, or shopping on Shopify merchants and paying
+  with that card.
 emoji: "💳"
 homepage: https://github.com/AEON-Project/aicard
 metadata:
@@ -390,6 +392,125 @@ Balance: {bnb} BNB
 
 ---
 
+## Step 5: Shop on Shopify (search → cart → pay → track)
+
+Trigger: user wants to **buy a physical product / shop online** — e.g. "buy wireless earbuds", "order a coffee mug", "find me running shoes under $50".
+
+This flow discovers products across all Shopify merchants, builds a cart, issues a virtual card, and auto-fills the merchant checkout to pay. **Full card details never leave the local process — the envelope only ever returns the last 4 digits.**
+
+> Prerequisite: wallet ready with enough USDT (Step 1 + funding). The card is issued from the user's session wallet at pay time; issuance errors mirror Step 2.
+
+### 5.1 Discover products (semantic search)
+
+Ask what they want if unstated, then:
+
+```bash
+aicard shop search --query "<natural language>" [--country US] [--max-price 50] [--limit 5]
+# single store only: add --shop <domain>
+```
+
+**Present results as a markdown table** (renders cleanly in the client, good density):
+
+| # | 商品 | 价格 | 商户 |
+|---|------|------|------|
+| 1 | {title} | ${priceMin} | {merchantName or merchantDomain} |
+| 2 | … | … | … |
+
+Then prompt: 「回复序号选择要购买的商品」。Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
+
+（可选富展示：加 `--html <path>` 生成图文卡片页，用 Artifact 或浏览器打开——仅当用户明确想看商品图时使用。）
+
+### 5.1b Product detail & pick options（选中商品后，别直接进购物车）
+
+Fetch full details and show a **detail view**:
+
+```bash
+aicard shop product --id <productId>
+# ⚠️ Global 搜索的结果用 Global 端点（不要加 --shop，否则 gid://shopify/p/… 会和 storefront id 不匹配而报错）。
+# 仅当上一步是单店搜索 `shop search --shop <domain>` 时，这里才同样加 --shop <domain>。
+```
+
+Present (C-end detail, not a bare dump):
+- 标题 + 价格 + 一句话卖点（取自 `specText`）
+- **规格表**：把 `options`（如 颜色/尺码）列成表格
+- 关键参数：从 `specText` 提炼材质/克重/产地等
+
+Then:
+- If `options` is non-empty → ask the user to pick, e.g. 「颜色+尺码，如 Black L」（冰箱则是「容量+能效」等，视 `options` 而定）. Map the choice to a `variantId` by matching `variants[].options`.
+- **Fallback (important)**: UCP 常只返回默认 variant，若所选组合不在 `variants[]` 里，用默认 variant 的 id 继续，并提示用户「已按默认规格下单，可在收银台核对/调整规格」。**绝不因选不到精确 variant 而卡住流程。**
+- Proceed to `shop cart` with the chosen `variantId` + `merchantDomain`.
+
+### 5.2 Build cart & show the real total
+
+First collect ship-to **country + postal code** (affects tax/shipping):
+
+> To check the exact total (incl. tax & shipping), what's your shipping country and postal/ZIP code?
+
+```bash
+aicard shop cart --shop <merchantDomain> --variant <variantId> [--qty 1] --country US --zip 10001
+```
+
+Show the breakdown and ask for explicit confirmation:
+
+```
+{title} ×{qty}
+Subtotal: ${subtotal}
+Tax:      ${tax}
+Shipping: ${shipping}
+Total:    ${total} {currency}
+
+Shall I issue a virtual card for ${total} and complete this purchase? (yes/no)
+```
+
+Record `continueUrl` and `total`.
+
+### 5.3 Collect shipping details
+
+Checkout needs the delivery address. Collect once:
+
+> To complete checkout I need: full name, email, address, city, ZIP, country, phone.
+
+### 5.4 Pay (issue card + auto-fill checkout)
+
+⚠️ **Real charge**: issues a real virtual card from the user's wallet and submits a real order. Only run after explicit confirmation.
+
+```bash
+aicard shop pay \
+  --continue-url "<continueUrl>" --amount <total> \
+  --email <email> --first <First> --last <Last> \
+  --address1 "<street>" --city "<City>" --zip <zip> --country "<Country label>" \
+  [--region "<State>"] [--phone <phone>] \
+  --headful --wait-otp 180000
+```
+
+- `--headful --wait-otp <ms>` lets a 3DS/OTP challenge be completed with the user's code.
+- Envelope returns `cardSource` (`cache`|`new`), `outcome`, `cardLast4`, `order` — **never a full card number**.
+
+**Card selection is automatic (no wallet needed if a card exists)**:
+1. `pay` first reuses a **cached card** whose face value ≥ order total → skips the wallet entirely.
+2. If none, it **issues a new card** from the wallet. On `INSUFFICIENT_USDT` / `NEEDS_APPROVE_GAS` / `WALLET_NOT_CONFIGURED`, the error carries a `hint` (e.g. run `aicard topup`) — relay it and stop, do not retry.
+3. One-time cards are marked **used** after a successful order (won't be reused).
+
+Use `aicard shop cards` to list cached cards (masked last-4 only).
+
+| `outcome` | Meaning | Next |
+| --- | --- | --- |
+| `success` | Paid, order placed | Show `order.number` / `order.url`; offer tracking (5.5) |
+| `challenge_3ds` / `challenge_captcha` | Needs the user's verification code | Ask the user for the code and relay it; the run auto-continues |
+| `declined` | Card/info rejected | Show `signals.formError`; suggest retry |
+| `fill_failed` | Card fields not injectable (checkout changed) | Report; do not retry blindly |
+| `no_card_iframe` | Not a payment page / redirected | Re-open from a fresh `cart` |
+
+### 5.5 Track order (optional)
+
+```bash
+aicard shop track --order <orderId> [--bearer <JWT>]
+```
+
+Requires a Token-tier credential (`read_global_api_orders`). Without it, rely on the confirmation from 5.4 (`order.number` / `order.url`).
+
+---
+
 ## Decision Routing Overview
 
 | User Intent | Entry Command |
@@ -404,6 +525,7 @@ Balance: {bnb} BNB
 | Top up BNB for local wallet (pre-withdraw) | `gas [--amount <bnb>]` |
 | Learn about x402 protocol | Read [x402-protocol](references/x402-protocol.md) |
 | What can I buy / what features are available | Read [store](references/store.md) |
+| Buy a product / shop online (Shopify) | `shop search` → `shop cart` → `shop pay` → `shop track` (Step 5) |
 
 ---
 

@@ -133,4 +133,95 @@ program
     return clean();
   });
 
+// ---------- Shopify 购物闭环：search → cart → pay → track ----------
+const shop = program
+  .command("shop")
+  .description("Shopify shopping: search → cart → pay → track");
+
+shop
+  .command("search")
+  .description("Semantic product search (Global, or a single store with --shop)")
+  .requiredOption("--query <text>", 'Natural-language query, e.g. "wireless earbuds under $50"')
+  .option("--shop <domain>", "Limit to a single merchant (Storefront Catalog)")
+  .option("--country <iso>", "Ship-to country ISO-2, e.g. US / GB")
+  .option("--max-price <usd>", "Max price in USD")
+  .option("--limit <n>", "Result count (1-50)", "10")
+  .option("--cursor <c>", "Pagination cursor")
+  .option("--html <path>", "Also render an image product-card HTML page (self-contained) to this path")
+  .action(async (opts) => {
+    const { search } = await import("../src/commands/shop.mjs");
+    return search(opts);
+  });
+
+shop
+  .command("product")
+  .description("Get full product details (specs, colors, sizes) for a search result")
+  .requiredOption("--id <gid>", "Product id (productId from search)")
+  .option("--shop <domain>", "Merchant domain (Storefront); omit for Global Catalog")
+  .action(async (opts) => {
+    const { product } = await import("../src/commands/shop.mjs");
+    return product(opts);
+  });
+
+shop
+  .command("cart")
+  .description("Build a cart and get totals + checkout URL")
+  .requiredOption("--shop <domain>", "Merchant domain (from search result)")
+  .requiredOption("--variant <gid>", "ProductVariant gid (from search result)")
+  .option("--qty <n>", "Quantity", "1")
+  .option("--country <iso>", "Ship-to country ISO-2")
+  .option("--region <code>", "Ship-to region/state")
+  .option("--zip <code>", "Postal code")
+  .action(async (opts) => {
+    const { cart } = await import("../src/commands/shop.mjs");
+    return cart(opts);
+  });
+
+shop
+  .command("pay")
+  .description("Issue a card and auto-fill the checkout to complete payment")
+  .requiredOption("--continue-url <url>", "Checkout URL from `shop cart`")
+  .requiredOption("--amount <usd>", "Card amount (= cart total)")
+  .requiredOption("--email <email>", "Buyer email")
+  .requiredOption("--first <name>", "First name")
+  .requiredOption("--last <name>", "Last name")
+  .requiredOption("--address1 <street>", "Address line 1")
+  .requiredOption("--city <city>", "City")
+  .requiredOption("--zip <code>", "Postal code")
+  .requiredOption("--country <name>", "Country label as shown in checkout, e.g. United Kingdom")
+  .option("--address2 <street>", "Address line 2")
+  .option("--region <name>", "Region/State label")
+  .option("--phone <phone>", "Phone number")
+  .option("--app-id <id>", "Merchant app ID for card issuance", "TEST000001")
+  .option("--service-url <url>", "Override card service URL")
+  .option("--private-key <key>", "Override EVM private key")
+  .option("--headful", "Show the browser (needed for manual 3DS/OTP)", false)
+  .option("--fill-only", "Fill card but do NOT submit (test only, no charge)", false)
+  .option("--wait-otp <ms>", "On 3DS/captcha, wait for OTP relay file up to N ms")
+  .option("--otp-file <path>", "OTP relay file path (default ./otp.txt)")
+  .option("--out <dir>", "Screenshot output dir (default ./artifacts)")
+  .action(async (opts) => {
+    const { pay } = await import("../src/commands/shop.mjs");
+    return pay(opts);
+  });
+
+shop
+  .command("track")
+  .description("Track order status (requires Token-tier credential)")
+  .requiredOption("--order <id>", "Order id")
+  .option("--bearer <jwt>", "Global API JWT (or env UCP_ORDER_TOKEN)")
+  .option("--shop <domain>", "Merchant domain")
+  .action(async (opts) => {
+    const { track } = await import("../src/commands/shop.mjs");
+    return track(opts);
+  });
+
+shop
+  .command("cards")
+  .description("List locally cached virtual cards (masked last-4 only)")
+  .action(async () => {
+    const { cards } = await import("../src/commands/shop.mjs");
+    return cards();
+  });
+
 program.parse();

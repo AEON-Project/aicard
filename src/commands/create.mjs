@@ -230,6 +230,13 @@ export async function create(opts) {
     const paymentResponse = decodePaymentResponse(response.headers);
     const orderNo = paymentReq.orderNo || response.data?.model?.orderNo || response.data?.orderNo;
 
+    // 缓存完整卡面到本地卡列表（供 shop 购物复用）；失败不阻断发卡结果，也不影响脱敏输出
+    try {
+      const { extractCard, addCard } = await import("../shop/cards.mjs");
+      const full = extractCard(response.data);
+      if (full) addCard({ orderNo, ...full, amount: amountNum, currency: "USD" });
+    } catch { /* ignore cache errors */ }
+
     const sanitizedData = sanitizeOutput(response.data);
     const successData = {
       orderNo,

@@ -31,6 +31,9 @@
     "qrcode-terminal": "^0.12.0",
     "viem": "^2.39.0"
   },
+  "optionalDependencies": {
+    "playwright": "^1.61.1"
+  },
   "engines": {
     "node": ">=25"
   },

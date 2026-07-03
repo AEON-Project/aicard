@@ -1,0 +1,17 @@
+{
+  "name": "aicard-spike-shopify-fill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Spike: 用确定性 Playwright 脚本往 Shopify 收银台自动填卡，量化 iframe 注入/3DS/验证码风险",
+  "bin": {
+    "spike-fill": "fill-checkout.mjs"
+  },
+  "scripts": {
+    "postinstall": "playwright install chromium",
+    "fill": "node fill-checkout.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
