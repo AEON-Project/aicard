@@ -161,7 +161,7 @@ export async function pay(opts) {
 
     // 2. 无可用卡 → 发新卡（需钱包 USDT）。一次性卡模型下"卡充值"即"发新卡"。
     if (!card) {
-      logInfo("> 本地无可用卡，正在发新卡（从钱包扣 USDT）...");
+      logInfo("> No usable cached card; issuing a new card (charging USDT from wallet)...");
       const { issueCard } = await import("../shop/card-issuer.mjs");
       try {
         const issued = await issueCard({ amount, appId: opts.appId, serviceUrl: opts.serviceUrl, privateKey: opts.privateKey });
@@ -183,7 +183,7 @@ export async function pay(opts) {
         });
       }
     } else {
-      logInfo(`> 命中本地缓存卡 •••• ${String(card.number).slice(-4)}（面额 $${card.amount}），跳过钱包直接付款。`);
+      logInfo(`> Using cached card •••• ${String(card.number).slice(-4)} (face $${card.amount}); paying directly, wallet untouched.`);
     }
 
     // 3. 填卡付款
@@ -199,7 +199,7 @@ export async function pay(opts) {
       zip: opts.zip,
       phone: opts.phone,
     };
-    logInfo("> 打开收银台并自动填卡付款...");
+    logInfo("> Opening checkout and auto-filling card to pay...");
     const r = await fillCheckout({
       continueUrl: opts.continueUrl,
       address,

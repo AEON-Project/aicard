@@ -525,7 +525,7 @@ Use `aicard shop cards` to list cached cards (masked last-4 only).
 
 | `outcome` | Meaning | Next |
 | --- | --- | --- |
-| `success` | 已下单成交 | 展示 `receipt`（见下）；给出本地凭证图路径 `receipt.proofImage` |
+| `success` | 已下单成交 | 展示 `receipt`（见下模板）；**不展示** `proofImage` 本地路径（仅用户索取凭证时再给） |
 | `challenge_3ds` / `challenge_captcha` | 需用户验证码（**验证未完成=未扣款**） | 用**一次**后台 `--wait-otp` 补完：脚本自动发码 → 向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 回填。别反复重跑 |
 | `pending` / `error` | 已点 Pay、结果不明（`paySubmitted:true`） | ⚠️ **款可能已扣，禁止重跑**。先核实(邮件/凭证图/商户订单)再由用户决定 |
 | `declined` | 卡被拒（**未扣款**） | 展示 `signals.formError`；报告后由用户决定是否换卡再发起 |
@@ -543,14 +543,14 @@ Use `aicard shop cards` to list cached cards (masked last-4 only).
 - 支付：{payment.scheme} •••• {payment.last4}（{payment.note}）
 - 配送：{shippingMethod} → {shipTo.name}，{shipTo.address}
 - 邮箱：{shipTo.email}（订单/物流确认邮件发到这里）
-- 凭证图：{proofImage}
 ```
+> 不要把 `receipt.proofImage` 的本地绝对路径展示给用户（`/Users/…/.aicard/receipts/…` 是 CLI 内部存储、会困扰用户）。凭证图仍会落盘留档，仅在用户**主动索取凭证**时再给路径。
 
 要点：
 - `orderNumber`（如 `X0FCMYJAT`）是**商户确认号**，不是 Shopify API Global ID，**不能用 `shop track`/`get_order` 查询**。
 - **金额以 `amountCharged` 为准**——优先感谢页最终 `total`（含运费+税，`amountSource:"checkout_total"`）；抓不到才回退 `--amount`（仅商品价，`amountSource:"cli_amount_fallback"`，可能偏小，需提示用户以卡账单为准）。运费/税是收银台结算时才加的，**`--amount` 不等于实扣额**。
 - `shipTo.email` **必须展示**——这是订单/物流确认邮件的接收地址。
-- `proofImage` = 本地持久付款凭证图 `~/.aicard/receipts/receipt-<确认号>-<ts>.png`（感谢页截图，无完整卡面），**主动把该路径给用户留存**。
+- `proofImage` = 本地持久付款凭证图 `~/.aicard/receipts/receipt-<确认号>-<ts>.png`（感谢页截图，无完整卡面）。**默认不展示这个本地路径**（会困扰用户）；仅用户主动要凭证时再给。
 - **二次查看订单**（原感谢页链接 `orderUrl` 会话绑定、不可重开——实测新浏览器打开会被弹回首页要求登录，`orderUrlDurable:false`）。引导用户走 `receipt.reopenVia`：
   - 收货邮箱里商户确认邮件的 *View your order* 链接（持久可打开）
   - 感谢页的 *Download to track with Shop*（需 Shop 账号）

@@ -116,7 +116,7 @@ export async function fillCheckout(p) {
   };
 
   try {
-    log("打开收银台…");
+    log("Opening checkout…");
     // waitUntil:"commit" 一提交导航即返回（比 domcontentloaded 快很多，重页面不会卡）；
     // 网络抖动重试：最多 3 次，命中即返回；全失败也不硬崩，交给下方早检判断可用性。
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -124,7 +124,7 @@ export async function fillCheckout(p) {
         await page.goto(p.continueUrl, { waitUntil: "commit", timeout: 20000 });
         break;
       } catch {
-        if (attempt < 3) { log(`收银台加载超时，重试 ${attempt}/2…`); await page.waitForTimeout(1000); }
+        if (attempt < 3) { log(`Checkout load timed out, retrying ${attempt}/2…`); await page.waitForTimeout(1000); }
       }
     }
     await page.waitForTimeout(800);
@@ -169,7 +169,7 @@ export async function fillCheckout(p) {
         }
       }
     }
-    log("填写收货信息…");
+    log("Filling shipping info…");
     // ⚠️ 顺序填，勿并行：实测并发 fill() 在部分收银台会字段错位（邮箱进 First name、姓并进 Address 等）。
     // 正确性 > 省那 1s。fill 用 el.fill 直接赋值，本身很快，顺序总耗时也就 1-2s。
     await fill('input[type="email"],input[name="email"],input#email', A.email);
@@ -240,14 +240,14 @@ export async function fillCheckout(p) {
       if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(1500); }
     }
     // 等配送方式真正加载完（骨架→真实单选项）再填卡：Shopify 在配送方式解析完成后会重渲染 payment 区，过早填卡会被清空
-    log("等待配送方式加载…"); // 收银台算运费率可能较久（最多约 45s），此处给出进度、避免看着像卡住
+    log("Waiting for shipping methods to load…"); // 收银台算运费率可能较久（最多约 45s），此处给出进度、避免看着像卡住
     const ship = await waitShippingReady(page);
     result.signals.shippingReady = ship.picked;
     _perf("shipping-ready");
     await shot("03-shipping");
 
     // 等待卡字段 iframe
-    log("等待并填写卡信息…");
+    log("Waiting for and filling card details…");
     let found = false;
     for (let i = 0; i < 40 && !found; i++) {
       found = page.frames().some((f) => FRAME.number(f.url() || "") || FRAME.number(f.name() || ""));
@@ -313,7 +313,7 @@ export async function fillCheckout(p) {
     }
 
     // 提交（真实扣款）
-    log("提交付款…");
+    log("Submitting payment…");
     // 选“立即付款”按钮：优先 Shopify 固定 id；否则按无障碍名匹配。
     // 关键：不能用 button[type=submit] + .first()——会命中 DOM 靠前的隐藏助手按钮
     // <button aria-hidden tabindex=-1>Submit</button>，点它被装饰层拦截而超时。getByRole 天然排除 aria-hidden 元素。
@@ -338,7 +338,7 @@ export async function fillCheckout(p) {
     // 轮询上限放大到 ~90s：付款 "Processing…"（含 frictionless 3DS + 建单）在慢网络下可能 >20s，
     // 过早返回 pending 会造成“款可能已扣但状态未知”的危险模糊态。success/declined/真挑战都提前退出，
     // 只有真正慢/卡的情况才等满。
-    log("等待支付结果…"); // 处理/建单/frictionless 3DS 可能持续几十秒，给出进度
+    log("Waiting for payment result…"); // 处理/建单/frictionless 3DS 可能持续几十秒，给出进度
     let outcome = "pending";
     let challengeStreak = 0;
     for (let i = 0; i < 90; i++) {
@@ -370,7 +370,7 @@ export async function fillCheckout(p) {
                 await c.click({ timeout: 3000 });
                 advanced = true;
                 result.signals.threeDSAdvanced = t.slice(0, 24);
-                log("已点 3DS 前进按钮：" + t.slice(0, 24));
+                log("Clicked 3DS advance button: " + t.slice(0, 24));
                 await page.waitForTimeout(3000);
                 break;
               }
@@ -382,7 +382,7 @@ export async function fillCheckout(p) {
       }
       if (!advanced) result.signals.threeDSAdvanced = false;
       await shot("07b-otp-step");
-      log(`需要验证码（${outcome}）。已触发发送——请把收到的验证码提供给我，我会写入 ${otpFile} 回填。`);
+      log(`Verification code required (${outcome}). Send triggered — please provide the code; it will be written to ${otpFile} and filled in.`);
       const deadline = Date.now() + waitOtpMs;
       let filled = false;
       while (Date.now() < deadline) {
@@ -390,7 +390,7 @@ export async function fillCheckout(p) {
         if (!filled && existsSync(otpFile)) {
           const code = readFileSync(otpFile, "utf8").trim();
           if (code) {
-            log("已收到验证码，回填中…");
+            log("Verification code received, filling in…");
             for (const fr of page.frames()) {
               try {
                 const inp = fr.locator('input[type="text"],input[type="tel"],input[autocomplete="one-time-code"],input[name*="otp" i],input[name*="code" i]').first();
@@ -464,7 +464,7 @@ async function selectOptionSmart(sel, name, code) {
 async function assistWait(browser, result, page, shot, log, p) {
   result.signals.assist = true;
   await shot("assist-ready");
-  log("⚠️ 脚本未能全自动完成。已弹出浏览器窗口并尽量填好地址/卡信息——请在窗口里补齐未完成的字段（国家/州/验证码等）并点【Pay / 付款】完成。（卡号能填的已由脚本填入，无需你手输）");
+  log("⚠️ Could not fully automate. A visible browser window is open with address/card prefilled — please complete the remaining fields (country/state/verification code) and click Pay. (The card number is already filled by the script; no need to type it.)");
   const deadline = Date.now() + (p.assistTimeoutMs || 600000); // 默认 10 分钟等用户操作
   while (Date.now() < deadline) {
     await page.waitForTimeout(3000);
@@ -623,7 +623,7 @@ async function launchWithAutoInstall(chromium, opts, log) {
   } catch (e) {
     const msg = String(e?.message || "");
     if (!/Executable doesn't exist|playwright install|please run|download new browsers/i.test(msg)) throw e;
-    log("首次购物：正在下载浏览器内核 chromium（约 150MB，仅首次，后续复用）…");
+    log("First purchase: downloading browser engine chromium (~150MB, one-time, reused after)…");
     const { execFileSync } = await import("node:child_process");
     try {
       execFileSync("npx", ["--yes", "playwright", "install", "chromium"], { stdio: ["ignore", 2, 2], timeout: 300000 });
@@ -633,7 +633,7 @@ async function launchWithAutoInstall(chromium, opts, log) {
         "浏览器内核自动下载失败，请手动运行：npx playwright install chromium（" + String(ie.message).split("\n")[0] + "）"
       );
     }
-    log("浏览器内核就绪，继续付款…");
+    log("Browser engine ready, continuing payment…");
     return await chromium.launch(opts);
   }
 }
