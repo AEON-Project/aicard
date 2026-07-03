@@ -20,7 +20,7 @@ export async function search(opts) {
       limit: opts.limit ? Number(opts.limit) : 30,
       cursor: opts.cursor,
       excludeTest: !opts.includeTest,
-      requireCard: !opts.includeNoCard, // 源头只留收信用卡的商户（虚拟卡只能用于收卡店）
+      requireCard: true, // 只支持信用卡：选品阶段就剔除不收卡/无法确认收卡的商户（虚拟卡只能用于收卡店）
       sort: opts.sort,
     });
     let htmlPath = null;
@@ -35,7 +35,7 @@ export async function search(opts) {
       scope: r.scope,
       count: r.products.length,
       excludedTest: r.excludedTestCount || 0,
-      excludedNoCard: r.excludedNoCard || 0, // 因不收信用卡被过滤掉的数量
+      excludedNoCard: r.excludedNoCard || 0, // 被剔除的【确认不收信用卡】商户数（无法确认的不剔除、予以保留）
       sortedBy: r.sortedBy || "relevance",
       hasNext: r.hasNext,
       cursor: r.cursor,

@@ -149,7 +149,6 @@ shop
   .option("--limit <n>", "Result count (1-50)", "30")
   .option("--cursor <c>", "Pagination cursor")
   .option("--include-test", "包含疑似测试/开发店（默认排除 *.myshopify.com 与 test/demo 命名）", false)
-  .option("--include-no-card", "包含不收信用卡的商户（默认只留收信用卡的，因虚拟卡只能用于收卡店）", false)
   .option("--html <path>", "Also render an image product-card HTML page (self-contained) to this path")
   .action(async (opts) => {
     const { search } = await import("../src/commands/shop.mjs");

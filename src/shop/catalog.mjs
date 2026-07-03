@@ -46,15 +46,32 @@ export async function searchCatalog(p) {
     out.products = out.products.filter((prod) => !isTestStore(prod.merchantDomain || prod.variants?.[0]?.merchantDomain));
     out.excludedTestCount = before - out.products.length;
   }
-  // 源头过滤：只保留“收信用卡（dev.shopify.card）”的商户——虚拟卡只能用于收卡商户。
-  // 全局 search 不带 payment_handlers，故对候选商户逐个做轻量单店查询确认。查不到不误杀（交 cart/浏览器兜底）。
-  if (p.requireCard) {
-    const domains = [...new Set(out.products.map((pr) => pr.merchantDomain).filter(Boolean))];
-    const pairs = await Promise.all(domains.map((d) => merchantAcceptsCard(d, p.profile).then((ok) => [d, ok])));
-    const cardMap = Object.fromEntries(pairs);
-    const before = out.products.length;
-    out.products = out.products.filter((pr) => cardMap[pr.merchantDomain] !== false);
-    out.excludedNoCard = before - out.products.length;
+  // 选品阶段筛选：我们只支持信用卡支付。宽松策略——只剔除【确认不收卡】的商户；
+  // 探测超时/无 payment_handlers（无法确认）的一律保留，避免误杀能刷卡的好商户
+  //（探测偶发超时是常态，严格剔除会把 ivyusa 这类实际能成交的店误杀）。
+  // 注意：payment_handlers 是店铺级、不随收货国家变化——国家专属的支付限制（如某国仅线下付款）
+  // 选品阶段无法感知，最终由收银台层 card_not_supported 兜底。
+  if (p.requireCard !== false) {
+    if (p.shopDomain) {
+      // 单店（Storefront）：搜索响应自带 payment_handlers，直接判定，无需逐店探测。
+      const ph = res.ucp?.payment_handlers;
+      const acceptsCard = ph && typeof ph === "object" && Object.keys(ph).includes("dev.shopify.card");
+      const hasHandlers = ph && typeof ph === "object" && Object.keys(ph).length > 0;
+      // 只在【确认不收卡】（拿到了 handlers 但不含 card）时剔除；拿不到 handlers 则不误杀。
+      if (hasHandlers && !acceptsCard) {
+        out.excludedNoCard = out.products.length;
+        out.products = [];
+      }
+    } else {
+      // 全网（Global）：搜索结果不带 payment_handlers，逐个候选商户做轻量单店探测。
+      const domains = [...new Set(out.products.map((pr) => pr.merchantDomain).filter(Boolean))];
+      const pairs = await Promise.all(domains.map((d) => merchantAcceptsCard(d, p.profile).then((s) => [d, s])));
+      const cardMap = Object.fromEntries(pairs);
+      const before = out.products.length;
+      // 只剔除【确认不收卡】的（"no"）；"yes" 与 "unknown"（无法确认）都保留。
+      out.products = out.products.filter((pr) => cardMap[pr.merchantDomain] !== "no");
+      out.excludedNoCard = before - out.products.length;
+    }
   }
   // 价格排序（最便宜优先）：按 priceMin 升序，无价的排最后。默认保持 Shopify 相关性顺序。
   if (p.sort === "price") {
@@ -65,9 +82,10 @@ export async function searchCatalog(p) {
 }
 
 /** 商户是否收信用卡：轻量单店 search_catalog 取 ucp.payment_handlers 判断 dev.shopify.card。
- *  查不到/出错 → 返回 true（不误杀，交 cart/浏览器兜底）。 */
+ *  返回三态："yes"（确认收卡）| "no"（确认不收）| "unknown"（探测超时/无 handlers，无法确认）。
+ *  宽松策略下只剔除 "no"；"unknown" 保留不误杀，交下游 cart / 收银台 card_not_supported 兜底。 */
 export async function merchantAcceptsCard(shopDomain, profile) {
-  if (!shopDomain) return true;
+  if (!shopDomain) return "unknown";
   try {
     const res = await ucpCall(
       shopEndpoint(shopDomain),
@@ -76,10 +94,10 @@ export async function merchantAcceptsCard(shopDomain, profile) {
       { profile: profile || CATALOG_PROFILE, retries: 1, timeoutMs: 12000 }
     );
     const ph = res.ucp?.payment_handlers;
-    if (!ph || typeof ph !== "object") return true; // 拿不到 handlers 就不误杀
-    return Object.keys(ph).includes("dev.shopify.card");
+    if (!ph || typeof ph !== "object") return "unknown"; // 拿不到 handlers → 无法确认
+    return Object.keys(ph).includes("dev.shopify.card") ? "yes" : "no";
   } catch {
-    return true;
+    return "unknown";
   }
 }
 

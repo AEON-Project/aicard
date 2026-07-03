@@ -21,7 +21,7 @@ description: >
 emoji: "💳"
 homepage: https://github.com/AEON-Project/aicard
 metadata:
-  version: "1.0.4"
+  version: "1.0.5"
   author: AEON-Project
   openclaw:
     requires:
@@ -410,6 +410,8 @@ aicard shop search --query "<natural language>" [--country US] [--max-price 50] 
 # 要最便宜：加 --sort price（结果按价格升序，products[0] 即最便宜）
 ```
 
+> 💳 **只支持信用卡**：`shop search` 返回的商户都能用信用卡付款，直接选即可，无需关心支付方式。
+
 > 💰 **想买最便宜**：`--sort price` 让结果按价格升序返回（`data.sortedBy:"price"`），取 `products[0]`。注意它排的是**本次返回结果内**的最便宜（Shopify 按相关性给的前 N 条），非全网绝对最低；想扩大候选池就加大 `--limit`（如 30）或配合 `--max-price`。
 
 **Present results as a markdown table** (renders cleanly in the client, good density):
@@ -482,7 +484,7 @@ Checkout needs the delivery address. Collect once:
 
 ⚠️ **Real charge**: issues a real virtual card from the user's wallet and submits a real order. Only run after explicit confirmation.
 
-> 💳 **支付方式校验由 CLI 内部处理，无需 agent 编排**：`shop pay` 在**点付款按钮之前**就会检测该收银台有没有信用卡选项——若该店对此收货国家只给 PayPal/钱包，返回 `card_not_supported`（**未扣款**），你据此换商户即可。不需要先跑 `--fill-only` 预检、也不用管 `payment_handlers`（那是 CLI 的事）。
+> 💳 **支付方式无需 agent 关心**：只支持信用卡，能进到 `shop pay` 的商户都能刷卡。极个别不收卡的会返回 `card_not_supported`（**未扣款**），换商户即可。
 
 ```bash
 # 无需任何浏览器/超时参数：代码默认 headless（后台不弹窗）、默认不阻塞
@@ -531,6 +533,7 @@ Use `aicard shop cards` to list cached cards (masked last-4 only).
 | `challenge_3ds` / `challenge_captcha` | 需用户验证码（**验证未完成=未扣款**） | 用**一次**后台 `--wait-otp` 补完：脚本自动发码 → 向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 回填。别反复重跑 |
 | `pending` / `error` | 已点 Pay、结果不明（`paySubmitted:true`） | ⚠️ **款可能已扣，禁止重跑**。先核实(邮件/凭证图/商户订单)再由用户决定 |
 | `declined` | 卡被拒（**未扣款**） | 展示 `signals.formError`；报告后由用户决定是否换卡再发起 |
+| `card_not_supported` | 该商户不收信用卡（**未扣款**） | 换一家收信用卡的商户即可 |
 | `shipping_not_ready` | 配送方式始终未加载（**未扣款、未下单**） | 报告；是否稍后重发由用户决定 |
 | `fill_failed` / `no_card_iframe` | 填单未完成、未提交（**未扣款**） | 报告；由用户决定用 `--assist` 手动完成或重发 |
 | `address_incomplete` | 国家/州没选中或缺字段（**未扣款**） | 看 `signals.reason`；报告后由用户补 `--region` 等再手动发起 |
