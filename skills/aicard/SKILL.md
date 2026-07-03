@@ -500,12 +500,18 @@ Use `aicard shop cards` to list cached cards (masked last-4 only).
 
 | `outcome` | Meaning | Next |
 | --- | --- | --- |
-| `success` | Paid, order placed | Show `order.number` / `order.url`; offer tracking (5.5) |
+| `success` | Paid, order placed | 展示 `receipt`（见下）；给出本地凭证图路径 `receipt.proofImage` |
 | `challenge_3ds` / `challenge_captcha` | Needs the user's verification code | Ask the user for the code and relay it; the run auto-continues |
 | `declined` | Card/info rejected | Show `signals.formError`; suggest retry |
 | `fill_failed` | Card fields not injectable (checkout changed) | Report; do not retry blindly |
 | `no_card_iframe` | Not a payment page / redirected | Re-open from a fresh `cart` |
 | `address_incomplete` | 国家/州没选中或缺字段 | 看 `signals.reason`；补 `--region` 等后重试，或走 assist 兜底 |
+
+**成功回执 `envelope.data.receipt`**（浏览器路径 web 订单）——展示给用户时务必说清：
+- `orderNumber`（如 `X0FCMYJAT`）是**商户确认号**，不是 Shopify API Global ID，**不能用 `shop track`/`get_order` 查询**。
+- `orderUrl` **会话绑定、不可二次打开**（`orderUrlDurable:false`；实测新浏览器打开会被弹回首页要求登录）。二次查看订单请引导用户走 `receipt.reopenVia`：确认邮件的 *View your order* 链接 / *Download to track with Shop* / 本地凭证图。
+- `proofImage` = 本地持久付款凭证图 `~/.aicard/receipts/receipt-<确认号>-<ts>.png`（感谢页截图，无完整卡面），**主动把该路径给用户留存**。
+- 金额以 `amountCharged`（= 卡实扣总额）为准，非页面抓取。
 
 **失败后先看 `envelope.suggestion`**（它区分两类失败，别无脑 assist）：
 - 「**配送限制**」——该商户不配送此国家（`signals.availableCountries` 列出实际支持的）→ **不要 assist**（弹窗也没用），换收货国家或换商户。
@@ -523,7 +529,7 @@ aicard shop pay --assist --continue-url "..." --amount ... --email ... <其余�
 aicard shop track --order <orderId> [--bearer <JWT>]
 ```
 
-Requires a Token-tier credential (`read_global_api_orders`). Without it, rely on the confirmation from 5.4 (`order.number` / `order.url`).
+Requires a Token-tier credential (`read_global_api_orders`). **⚠️ 仅能查通过纯 API `complete_checkout` 完成的订单**——当前浏览器填卡路径的订单（`shop pay`）**查不到**（`orderNumber` 是商户确认号非 Global ID）。浏览器路径订单一律靠 5.4 的 `receipt`（确认号 + 本地凭证图 + 确认邮件），不要尝试 `shop track`。
 
 ---
 

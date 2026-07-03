@@ -39,7 +39,14 @@ export async function searchCatalog(p) {
   if (p.cursor) catalog.pagination.cursor = p.cursor;
 
   const res = await ucpCall(endpoint, "search_catalog", { catalog }, { profile: p.profile || CATALOG_PROFILE, retries: 2 });
-  return normalizeSearch(res, p.shopDomain ? "storefront" : "global");
+  const out = normalizeSearch(res, p.shopDomain ? "storefront" : "global");
+  // 默认排除疑似测试/开发店（*.myshopify.com、test/demo 命名）；传 excludeTest:false 保留
+  if (p.excludeTest !== false) {
+    const before = out.products.length;
+    out.products = out.products.filter((prod) => !isTestStore(prod.merchantDomain || prod.variants?.[0]?.merchantDomain));
+    out.excludedTestCount = before - out.products.length;
+  }
+  return out;
 }
 
 /**
@@ -139,6 +146,15 @@ function domainFromUrl(u) {
 function cleanDomain(d) {
   if (!d) return null;
   return String(d).replace(/^https?:\/\//, "").replace(/\/+$/, "");
+}
+
+/** 疑似测试/开发店：店铺名含 test/demo/sandbox/staging。
+ *  ⚠️ 不能用 .myshopify.com 判断——那是所有 Shopify 店（含正式大牌 corkcicle.myshopify.com）的收银台后端，非测试标志。 */
+export function isTestStore(domain) {
+  const d = String(domain || "").toLowerCase();
+  if (!d) return false;
+  const store = d.replace(/^www\./, "").split(".")[0]; // 店铺名段（如 twinoakstest / corkcicle）
+  return /(^|[-_])(test|demo|sandbox|staging)([-_]|$)/.test(store) || /(^test|test$|^demo|demo$|sandbox|staging)/.test(store);
 }
 
 /** 国家名或 ISO → ISO-2（UCP context.address_country 用 ISO；search --country 可传名或 ISO） */

@@ -194,9 +194,23 @@
 | 支付路径 | 订单跟踪方式 |
 |---|---|
 | 纯 API（`complete_checkout`，M2） | `get_order` + Order webhooks ✅ |
-| 浏览器填卡（当前主路径） | 收银台成功页 `order.number` / `order.url`（`checkout-filler.extractOrder`）+ 用户邮箱 ❌ 无 Order MCP |
+| 浏览器填卡（当前主路径） | 感谢页确认号 + 本地凭证图 + 确认邮件 ❌ 无 Order MCP |
 
-**Sources**: [Order MCP server](https://shopify.dev/docs/agents/orders/order-mcp) · [Order webhooks](https://shopify.dev/docs/agents/orders/order-webhooks)
+### 12.1 浏览器路径的订单标识与凭证（实测结论）
+
+- **确认号 ≠ Global ID**：感谢页 `Confirmation #X0FCMYJAT` 是**商户 web 确认号**（`extractOrder` 用正则 `#[A-Z0-9]{3,}` 抓，注意是字母数字非纯数字）。它**不是** Shopify API 的 `gid://shopify/Order/...`——后者只由 `complete_checkout` 返回，浏览器路径拿不到，故 `orderNumber` 无法反查 `get_order`。
+- **感谢页 URL 会话绑定、不可二次打开**（实测）：用全新浏览器上下文（无 cookie）打开 `order.url`（带或不带 `_r` 恢复 token）都被重定向到商户首页并要求登录/验证。故 `receipt.orderUrlDurable = false`。
+- **持久凭证 = 本地图**：成功时把感谢页整页截图落盘到 `~/.aicard/receipts/receipt-<确认号>-<ts>.png`（`receipt.proofImage`）。持久目录、非 artifacts（不被清理）、无完整卡面。
+- **用户二次查看订单（`receipt.reopenVia`）**：① 确认邮件里的 *View your order* 链接（带新鲜 token，持久）② 感谢页 *Download to track with Shop*（需 Shop 账号）③ 本地 `proofImage`。
+- **金额权威值**：`receipt.amountCharged = --amount = 购物车总额 = 卡实扣`。**不从感谢页正则抓金额**（多币种/多 Total 行/兄弟节点易抓错）；明细需精确时从 `shop cart` 权威返回透传。
+
+### 12.2 “让浏览器订单可 MCP 追踪”的唯一杠杆及其阻碍
+
+改用 **Checkout MCP `create_checkout`** 建会话（而非 Cart MCP `create_cart`）→ 浏览器填卡完成 → poll `get_checkout`，**若** `status` 翻 `completed` 会带出 `order.id`（Global ID）→ 即可 `get_order`/webhook 追踪。
+
+⚠️ 两重阻碍：① 文档**未证实** `continue_url` 浏览器完成会让 `get_checkout` 翻 `completed`（需实测）；② **`create_checkout` / `get_checkout` / `update_checkout` 全部要 Token tier**（client_credentials JWT，60 分钟 TTL，Dev Dashboard 注册 app 获取），当前项目**未配置任何 Token 凭证**（`ucp.mjs` 支持传 `bearer` 但无来源）。故此杠杆需先完成 Shopify app 注册与 Token 接入才能实测。
+
+**Sources**: [Order MCP server](https://shopify.dev/docs/agents/orders/order-mcp) · [Checkout MCP server](https://shopify.dev/docs/agents/checkout/mcp) · [Auth & rate limiting](https://shopify.dev/docs/agents/profiles/auth-and-rate-limiting) · [Order webhooks](https://shopify.dev/docs/agents/orders/order-webhooks)
 
 ---
 

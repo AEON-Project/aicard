@@ -9,7 +9,8 @@
  * playwright 为可选依赖，按需动态加载。
  */
 import { mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
-import { resolve as pathResolve } from "node:path";
+import { resolve as pathResolve, join as pathJoin } from "node:path";
+import { homedir } from "node:os";
 import { COUNTRY_CODES } from "./country-data.mjs";
 
 export class FillError extends Error {
@@ -189,8 +190,8 @@ export async function fillCheckout(p) {
       const b = page.locator(`button:has-text("${label}")`).first();
       if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(4000); }
     }
-    const ship = page.locator('input[type="radio"][name*="delivery" i],input[type="radio"][name*="shipping" i]').first();
-    if (await ship.count()) { await ship.check().catch(() => {}); await page.waitForTimeout(2000); }
+    // 等配送方式真正加载完（骨架→真实单选项）再填卡：Shopify 在配送方式解析完成后会重渲染 payment 区，过早填卡会被清空
+    await waitShippingReady(page);
     await shot("03-shipping");
 
     // 等待卡字段 iframe
@@ -204,28 +205,44 @@ export async function fillCheckout(p) {
 
     await dismissOverlays(page); // 关闭 Shop "Confirm it's you" 等遮挡卡字段的弹窗
 
-    for (const k of ["number", "expiry", "cvc", "name"]) {
-      const fr = page.frames().find((f) => FRAME[k](f.url() || "") || FRAME[k](f.name() || ""));
-      result.signals[`card_${k}`] = { located: !!fr, filled: false };
-      if (!fr) continue;
-      try {
-        const inp = fr.locator(INPUT[k]).first();
-        await inp.waitFor({ state: "visible", timeout: 8000 });
-        await inp.click();
-        await inp.type(String(p.card[k]), { delay: 40 });
-        const v = await inp.inputValue().catch(() => "");
-        result.signals[`card_${k}`].filled = v.replace(/\s/g, "").length > 0;
-      } catch (e) {
-        result.signals[`card_${k}`].error = e.message.split("\n")[0];
+    // 填卡（可重复调用）：每字段先读现值，缺失/被清空才重填，blur 触发校验格式化。返回 number/expiry/cvc 是否都已就位
+    const fillCard = async () => {
+      for (const k of ["number", "expiry", "cvc", "name"]) {
+        const fr = page.frames().find((f) => FRAME[k](f.url() || "") || FRAME[k](f.name() || ""));
+        const sig = (result.signals[`card_${k}`] ||= { located: false, filled: false });
+        sig.located = !!fr;
+        if (!fr) continue;
+        try {
+          const inp = fr.locator(INPUT[k]).first();
+          await inp.waitFor({ state: "visible", timeout: 8000 });
+          const want = String(p.card[k]).replace(/\s/g, "");
+          let cur = (await inp.inputValue().catch(() => "")).replace(/\s/g, "");
+          if (cur !== want) {
+            await inp.click();
+            await inp.fill("").catch(() => {});
+            await inp.type(String(p.card[k]), { delay: 40 });
+            await inp.evaluate((el) => el.blur()).catch(() => {}); // 触发 Shopify 卡字段校验/格式化
+            cur = (await inp.inputValue().catch(() => "")).replace(/\s/g, "");
+          }
+          sig.filled = cur.length > 0;
+        } catch (e) {
+          sig.error = e.message.split("\n")[0];
+        }
       }
-    }
+      return ["number", "expiry", "cvc"].every((k) => result.signals[`card_${k}`]?.filled);
+    };
+
+    await fillCard();
+    await page.waitForTimeout(1500); // 若 payment 区仍在重渲染，给它落定时间
     await shot("05-card-filled");
 
     // assist 兜底：填完能填的（含卡号，脚本内存填入）→ 保持窗口让用户补齐并手动点付款
     if (p.assist) return assistWait(browser, result, page, shot, log, p);
 
-    if (!["number", "expiry", "cvc"].every((k) => result.signals[`card_${k}`]?.filled)) {
+    // 提交前复检并重填：Shopify 重渲染可能清空卡 iframe，此处是唯一能保证“点付款那一刻卡字段有值”的地方
+    if (!(await fillCard())) {
       result.outcome = "fill_failed";
+      await shot("05b-refill-failed");
       return finish(browser, result);
     }
 
@@ -233,9 +250,20 @@ export async function fillCheckout(p) {
 
     // 提交（真实扣款）
     log("提交付款…");
-    const pay = page.locator('button#checkout-pay-button,button:has-text("Pay now"),button:has-text("立即付款"),button:has-text("付款"),button[type="submit"]').first();
+    // 选“立即付款”按钮：优先 Shopify 固定 id；否则按无障碍名匹配。
+    // 关键：不能用 button[type=submit] + .first()——会命中 DOM 靠前的隐藏助手按钮
+    // <button aria-hidden tabindex=-1>Submit</button>，点它被装饰层拦截而超时。getByRole 天然排除 aria-hidden 元素。
+    let pay = page.locator("button#checkout-pay-button").first();
+    if (!(await pay.isVisible().catch(() => false))) {
+      pay = page.getByRole("button", { name: /pay now|complete order|place order|立即付款|付款|下单|结账/i }).first();
+    }
     await pay.waitFor({ state: "visible", timeout: 10000 });
-    await pay.click();
+    await pay.scrollIntoViewIfNeeded().catch(() => {});
+    try {
+      await pay.click({ timeout: 15000 });
+    } catch {
+      await pay.click({ timeout: 15000, force: true }); // 装饰性覆盖层拦截时强制点
+    }
     await page.waitForTimeout(6000);
     await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
     await shot("06-after-pay");
@@ -246,7 +274,32 @@ export async function fillCheckout(p) {
     if ((outcome === "challenge_3ds" || outcome === "challenge_captcha") && waitOtpMs > 0) {
       result.signals.challenge = outcome;
       await shot("07-challenge");
-      log(`需要验证码（${outcome}）。请把收到的验证码提供给我；系统将写入 ${otpFile} 后自动回填。`);
+      // 多步 3DS（如 UQPAY：选认证方式 → Next → OTP 发到邮箱）：枚举所有 frame 的可点击元素，按文本匹配点前进按钮触发发码
+      await page.waitForTimeout(2000); // 等 3DS iframe 加载
+      let advanced = false;
+      for (let round = 0; round < 2 && !advanced; round++) {
+        for (const fr of page.frames()) {
+          const cands = await fr.locator('button, input[type="submit"], input[type="button"], [role="button"], a').all().catch(() => []);
+          for (const c of cands) {
+            try {
+              const t = (((await c.textContent().catch(() => "")) || "") + " " + ((await c.getAttribute("value").catch(() => "")) || "")).trim().toLowerCase();
+              if (/next|continue|获取|下一步|submit|verify|confirm|proceed|send|发送|确定/.test(t) && (await c.isVisible().catch(() => false))) {
+                await c.click({ timeout: 3000 });
+                advanced = true;
+                result.signals.threeDSAdvanced = t.slice(0, 24);
+                log("已点 3DS 前进按钮：" + t.slice(0, 24));
+                await page.waitForTimeout(3000);
+                break;
+              }
+            } catch { /* 下一个 */ }
+          }
+          if (advanced) break;
+        }
+        if (!advanced) await page.waitForTimeout(1500);
+      }
+      if (!advanced) result.signals.threeDSAdvanced = false;
+      await shot("07b-otp-step");
+      log(`需要验证码（${outcome}）。已触发发送——请把收到的验证码提供给我，我会写入 ${otpFile} 回填。`);
       const deadline = Date.now() + waitOtpMs;
       let filled = false;
       while (Date.now() < deadline) {
@@ -277,7 +330,18 @@ export async function fillCheckout(p) {
     }
 
     result.outcome = outcome;
-    if (outcome === "success") result.order = await extractOrder(page);
+    if (outcome === "success") {
+      result.order = await extractOrder(page);
+      // 持久化付款凭证图到 ~/.aicard/receipts/（感谢页，无完整卡面），路径随结果返回供用户留存/售后
+      try {
+        const dir = pathJoin(homedir(), ".aicard", "receipts");
+        mkdirSync(dir, { recursive: true });
+        const safe = String(result.order.number || "order").replace(/[^A-Za-z0-9_-]/g, "");
+        const file = pathJoin(dir, `receipt-${safe}-${Date.now()}.png`);
+        await page.screenshot({ path: file, fullPage: true });
+        result.order.receiptImage = file;
+      } catch { /* 凭证图失败不影响下单结果 */ }
+    }
     return finish(browser, result);
   } catch (e) {
     result.outcome = "error";
@@ -358,6 +422,25 @@ async function detect(page, result) {
 }
 
 /** 关闭会遮挡卡字段的弹窗（Shop "Confirm it's you" 登录框等） */
+// 等配送方式区就绪：骨架占位消失、出现真实单选项后选中第一项，再等 payment 区重渲染落定。
+// 关键：Shopify 在配送方式解析完成后会重挂载卡 iframe，过早填卡会被清空（corkcicle 尤甚）。
+async function waitShippingReady(page) {
+  const radios = page.locator('input[type="radio"][name*="delivery" i],input[type="radio"][name*="shipping" i]');
+  let picked = false;
+  for (let i = 0; i < 20 && !picked; i++) {
+    if ((await radios.count().catch(() => 0)) > 0) {
+      const first = radios.first();
+      if (!(await first.isChecked().catch(() => false))) await first.check().catch(() => {});
+      picked = true;
+      break;
+    }
+    await page.waitForTimeout(1000); // 骨架加载中或该单无配送方式（数字商品/免运费）
+  }
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(1500); // 让 payment 区重挂载落定，避免随后填卡被清空
+  return picked;
+}
+
 async function dismissOverlays(page) {
   await page.keyboard.press("Escape").catch(() => {});
   const closers = [
@@ -390,14 +473,42 @@ async function dismissOverlays(page) {
   await page.waitForTimeout(800);
 }
 
-async function extractOrder(page) {
+export async function extractOrder(page) {
   const url = page.url();
   const m = url.match(/\/orders\/([^/?#]+)/) || url.match(/order[_-]?(?:number|id)=([^&]+)/i);
   let number = null;
-  // 只认明确的订单号格式：Confirmation/Order/订单 后带 # + 数字（避免误抓 "Order Summary" 等）
-  const t = await page.getByText(/(confirmation|order|订单)\s*#\s*\d{3,}/i).first().textContent().catch(() => null);
-  if (t) { const mm = t.match(/#\s*(\d{3,})/); if (mm) number = mm[1]; }
-  return { url, id: m ? m[1] : null, number };
+  // 只认明确的订单号格式：Confirmation/Order/订单 后带 # + 字母数字码（如 X0FCMYJAT / 1023）
+  const t = await page.getByText(/(confirmation|order|订单)\s*#\s*[A-Z0-9]{3,}/i).first().textContent().catch(() => null);
+  if (t) { const mm = t.match(/#\s*([A-Z0-9]{3,})/i); if (mm) number = mm[1]; }
+  // 感谢页订单汇总（尽力而为，跨商户可能拿不到）：商品行 + 合计
+  const items = await page
+    .locator('[class*="summary"] [class*="product"], [aria-label*="order summary" i] li, [role="table"] [role="row"]')
+    .evaluateAll((els) =>
+      els
+        .map((e) => (e.textContent || "").replace(/\s+/g, " ").trim())
+        .filter((s) => s && s.length < 160)
+        .slice(0, 10)
+    )
+    .catch(() => []);
+  // ⚠️ 不从感谢页正则抓金额（多币种/多个 Total 行/兄弟节点易抓错）。
+  //    金额权威来源是 pay 的 --amount（= 购物车总额 = 卡实际扣款），由上层写入 receipt。
+  // 配送方式（"Shipping method" 标题下一行）— 描述性文本，抓错也不影响金额准确性
+  const shippingMethod = await page
+    .getByText(/shipping method|配送方式|运送方式/i)
+    .locator("xpath=following::*[1]")
+    .first()
+    .textContent()
+    .catch(() => null);
+  let merchant = null;
+  try { merchant = new URL(url).host.replace(/\.myshopify\.com$/, "") || null; } catch { /* ignore */ }
+  return {
+    url,
+    id: m ? m[1] : null,
+    number,
+    merchant,
+    items: items.length ? items : null,
+    shippingMethod: shippingMethod ? shippingMethod.replace(/\s+/g, " ").trim().slice(0, 80) : null,
+  };
 }
 
 async function finish(browser, result) {

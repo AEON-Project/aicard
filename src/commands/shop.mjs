@@ -19,6 +19,7 @@ export async function search(opts) {
       available: true,
       limit: opts.limit ? Number(opts.limit) : 10,
       cursor: opts.cursor,
+      excludeTest: !opts.includeTest,
     });
     let htmlPath = null;
     if (opts.html) {
@@ -31,6 +32,7 @@ export async function search(opts) {
     emitOk("shop.search", {
       scope: r.scope,
       count: r.products.length,
+      excludedTest: r.excludedTestCount || 0,
       hasNext: r.hasNext,
       cursor: r.cursor,
       htmlPath,
@@ -202,6 +204,34 @@ export async function pay(opts) {
       suggestion = "可恢复：用 --assist 重跑（弹出可见浏览器窗口，脚本填好已知信息，由用户手动补齐 State/验证码等并点付款）。";
     }
 
+    // 支付成功 → 组装结构化收据（收货/金额来自入参，卡末4/结果来自结果，确认号/明细/凭证图来自感谢页）
+    const shipAddr = [opts.address1, opts.address2, opts.city, opts.region, opts.zip, opts.country].filter(Boolean).join(", ");
+    const receipt =
+      r.outcome === "success"
+        ? {
+            status: "confirmed",
+            merchant: r.order?.merchant || (() => { try { return new URL(opts.continueUrl).host.replace(/\.myshopify\.com$/, ""); } catch { return null; } })(),
+            orderNumber: r.order?.number || null,
+            orderUrl: r.order?.url || null,
+            orderUrlDurable: false, // ⚠️ 实测：感谢页 URL 会话绑定，新浏览器打开会被弹回首页要求登录，不可二次打开
+            purchasedAt: new Date().toISOString(),
+            amountCharged: amount, // 权威：= --amount = 购物车总额 = 卡实际扣款（非页面抓取）
+            currency: "USD",
+            items: r.order?.items || null,
+            shippingMethod: r.order?.shippingMethod || null,
+            payment: { scheme: card.scheme, last4: String(card.number).slice(-4), source: cardSource },
+            shipTo: { name: `${opts.first} ${opts.last}`.trim(), email: opts.email, phone: opts.phone, address: shipAddr },
+            billingSameAsShipping: true,
+            proofImage: r.order?.receiptImage || null, // 本地付款凭证图（感谢页截图），持久留档/售后用
+            reopenVia: [
+              "商户确认邮件（发到收货邮箱）里的 View your order 链接——持久可打开",
+              "感谢页的 Download to track with Shop（Shop app，需 Shop 账号）",
+              "本地 proofImage 凭证图（离线留档）",
+            ],
+            note: "浏览器路径 web 订单：orderNumber 是商户确认号（非 Shopify API Global ID），不可用 get_order 查询。orderUrl 会话绑定、不可二次打开；二次查看请用 reopenVia。",
+          }
+        : null;
+
     // 卡面绝不进 envelope，只回末 4 位与结果
     emitOk("shop.pay", {
       cardSource,
@@ -209,6 +239,7 @@ export async function pay(opts) {
       cardLast4: String(card.number).slice(-4),
       cardScheme: card.scheme,
       outcome: r.outcome,
+      ...(receipt ? { receipt } : {}),
       order: r.order,
       artifacts: r.artifacts,
       signals: r.signals,
