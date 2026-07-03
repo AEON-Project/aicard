@@ -21,7 +21,7 @@ description: >
 emoji: "💳"
 homepage: https://github.com/AEON-Project/aicard
 metadata:
-  version: "0.9.3"
+  version: "0.9.4"
   author: AEON-Project
   openclaw:
     requires:
@@ -450,17 +450,20 @@ First collect ship-to **country + postal code** (affects tax/shipping):
 aicard shop cart --shop <merchantDomain> --variant <variantId> [--qty 1] --country US --zip 10001
 ```
 
-Show the breakdown and ask for explicit confirmation:
+Show the breakdown, then **先查缓存卡再给确认话术**（`aicard shop cards`，找 `used:false && amount ≥ total` 的卡），据此二选一：
 
+命中缓存卡（应优先，不开新卡、不动钱包）：
 ```
-{title} ×{qty}
-Subtotal: ${subtotal}
-Tax:      ${tax}
-Shipping: ${shipping}
-Total:    ${total} {currency}
+{title} ×{qty}   合计 ${total} {currency}（税/运费收银台结算）
+将用【已有虚拟卡 •••• {last4}（面额 ${amount}）】支付本单 —— 无需开新卡、不动用钱包。真实扣款，确认下单？(yes/no)
+```
+无可用缓存卡（才开新卡，需钱包 USDT）：
+```
+{title} ×{qty}   合计 ${total} {currency}（税/运费收银台结算）
+将【开一张 ${total} 的新虚拟卡】（从钱包扣 USDT）支付本单。真实扣款，确认下单？(yes/no)
+```
 
-Shall I issue a virtual card for ${total} and complete this purchase? (yes/no)
-```
+> ⚠️ 不要在有可用缓存卡时说"开一张新卡"——那与 `shop pay` 实际行为（命中缓存卡 `cardSource:cache`）不符，会误导用户。
 
 Record `continueUrl` and `total`.
 
@@ -485,7 +488,8 @@ aicard shop pay \
 
 - **默认就是对的**：代码默认 `headless`（后台运行、不弹浏览器窗口）+ 默认不阻塞（不传 `--wait-otp` 时，遇 3DS 直接返回 `outcome: challenge_3ds`，**不会挂起超时**）。不要画蛇添足加 `--headful`（弹窗等人）或前台 `--wait-otp`（阻塞超时）。
 - Envelope returns `cardSource` (`cache`|`new`), `outcome`, `cardLast4`, `order` — **never a full card number**.
-- **（进阶）3DS 自动回填**：仅当要在同一进程内等用户输验证码时，才 `run_in_background` 运行 + 加 `--wait-otp <ms> --otp-file <path>`，检测到挑战后向用户要码并 `echo "<code>" > <path>` 回填。否则默认按下方 `outcome` 分支处理即可。
+- **3DS 一律用 `--assist` 弹窗**：真实 3DS 常是**多步**（实测 UQPAY：选认证方式 → 点 Next → OTP 发到卡绑定邮箱 → 输入 → 提交）。headless 的文本 OTP 回填（`--wait-otp` + otp 文件）**只能填最后的 OTP 框、点不了前面的 Next，对多步 3DS 无效**。所以遇 `challenge_3ds` 就用 `--assist`：弹出可见窗口，让用户自己走完 3DS（点 Next、去邮箱/手机收 OTP、输入、提交），脚本轮询到成功页自动收尾。
+- `--wait-otp <ms> --otp-file <path>`（后台运行 + `echo "<code>" > <path>` 回填）**仅保留给极少数「单步纯 OTP 输入框」**的 3DS；多步 3DS 请勿用它。
 
 **Card selection is automatic (no wallet needed if a card exists)**:
 1. `pay` first reuses a **cached card** whose face value ≥ order total → skips the wallet entirely.

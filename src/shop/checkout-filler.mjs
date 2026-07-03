@@ -33,12 +33,7 @@ const INPUT = {
   name: 'input[name="name"],input[autocomplete="cc-name"]',
 };
 
-// COUNTRY_CODES 来自 country-data.mjs（从真实 Shopify 收银台抠取的 201 国权威数据，见顶部 import）
-// 补充日常简称 → ISO code（country-data 用官方名如 "Hong Kong SAR"，这里补常见叫法，直接用 value 选最可靠）
-Object.assign(COUNTRY_CODES, {
-  "hong kong": "HK", "macau": "MO", "macao": "MO", "taiwan": "TW",
-  "south korea": "KR", "korea": "KR", "russia": "RU", "vietnam": "VN", "uae": "AE",
-});
+// COUNTRY_CODES 来自 country-data.mjs（含权威 201 国 + 常见简称别名，单一事实源；见顶部 import）
 
 /**
  * 填卡并提交。
@@ -137,8 +132,14 @@ export async function fillCheckout(p) {
     await fill('input[autocomplete="postal-code"],input[name="postalCode"],input[name="zip"],input[placeholder*="Postal" i],input[placeholder*="邮政" i]', A.zip);
     await fill('input[autocomplete="tel"],input[type="tel"]', A.phone);
     if (A.region) {
-      const st = page.locator('select[autocomplete="address-level1"],select[name*="province" i],select[name*="state" i]').first();
-      if (await st.count()) {
+      // State/省 下拉常在国家选中后才异步出现，轮询等它出现（最多 ~5.6s）
+      let st = null;
+      for (let i = 0; i < 8; i++) {
+        const cand = page.locator('select[autocomplete*="address-level1" i],select[name="zone" i],select[name*="province" i],select[name*="state" i]').first();
+        if (await cand.count()) { st = cand; break; }
+        await page.waitForTimeout(700);
+      }
+      if (st) {
         try {
           await st.waitFor({ state: "visible", timeout: 5000 });
           await page.waitForTimeout(500); // 等 options 异步加载
@@ -146,6 +147,8 @@ export async function fillCheckout(p) {
         } catch {
           result.signals.regionSelected = false;
         }
+      } else {
+        result.signals.regionSelected = false; // 下拉始终没出现
       }
     }
     await shot("02-address");
@@ -346,8 +349,11 @@ async function detect(page, result) {
   const fr = page.frames();
   if (fr.some((f) => /3ds|acs|challenge|secure|authorize/i.test(f.url() || ""))) return "challenge_3ds";
   if (fr.some((f) => /recaptcha|hcaptcha|turnstile/i.test(f.url() || ""))) return "challenge_captcha";
-  const err = await page.getByText(/declined|invalid|incorrect|错误|被拒|无效|not be processed|失败/i).first().textContent().catch(() => null);
+  const err = await page.getByText(/declined|incorrect|被拒|not be processed|支付失败|card was declined/i).first().textContent().catch(() => null);
   if (err) { result.signals.formError = err.trim().slice(0, 200); return "declined"; }
+  // 地址校验红框（State/国家/邮编未选或无效）→ 可恢复的 address_incomplete，而非误判 pending
+  const addrErr = await page.getByText(/select a (state|province|country)|enter a valid|请选择.*(州|省|国家)|请输入有效/i).first().textContent().catch(() => null);
+  if (addrErr) { result.signals.addressError = addrErr.trim().slice(0, 120); return "address_incomplete"; }
   return "pending";
 }
 
@@ -388,8 +394,9 @@ async function extractOrder(page) {
   const url = page.url();
   const m = url.match(/\/orders\/([^/?#]+)/) || url.match(/order[_-]?(?:number|id)=([^&]+)/i);
   let number = null;
-  const t = await page.getByText(/(order|订单)\s*#?\s*([A-Z0-9-]+)/i).first().textContent().catch(() => null);
-  if (t) { const mm = t.match(/#?\s*([A-Z0-9][A-Z0-9-]{3,})/i); if (mm) number = mm[1]; }
+  // 只认明确的订单号格式：Confirmation/Order/订单 后带 # + 数字（避免误抓 "Order Summary" 等）
+  const t = await page.getByText(/(confirmation|order|订单)\s*#\s*\d{3,}/i).first().textContent().catch(() => null);
+  if (t) { const mm = t.match(/#\s*(\d{3,})/); if (mm) number = mm[1]; }
   return { url, id: m ? m[1] : null, number };
 }
 

@@ -115,7 +115,7 @@ export async function pay(opts) {
     const cin = String(shipping.country).trim().toLowerCase();
     const countryValid = !!COUNTRY_CODES[cin] || COUNTRIES.some((c) => {
       const n = c.name.toLowerCase();
-      return c.code.toLowerCase() === cin || n === cin || (cin.length >= 3 && (n.includes(cin) || cin.includes(n)));
+      return c.code.toLowerCase() === cin || n === cin || (cin.length >= 3 && n.includes(cin));
     });
     if (!countryValid)
       return emitErr("shop.pay", "INVALID_COUNTRY", { message: `国家 '${shipping.country}' 不是已知国家名或 ISO 代码（示例：United States / US / Hong Kong / GB）`, field: "country" });
@@ -143,7 +143,7 @@ export async function pay(opts) {
           INSUFFICIENT_USDT: "钱包 USDT 不足。请先给钱包充值：aicard topup --amount <n>",
           NEEDS_APPROVE_GAS: "本地钱包缺 BNB 做首次 approve。请先：aicard gas",
           WALLET_NOT_CONFIGURED: "钱包未配置。请先：aicard setup --check",
-          AMOUNT_OUT_OF_RANGE: "订单金额超出单卡可发范围，请调整金额。",
+          AMOUNT_OUT_OF_RANGE: "本单金额不在单卡可发区间 $0.6~$800，请换商品或拆分订单（金额须等于购物车总额，无法单独调整）。",
         }[e.code];
         return emitErr("shop.pay", e.code || "CARD_ISSUE_FAILED", {
           message: e.message,
@@ -188,14 +188,18 @@ export async function pay(opts) {
     // 根据结果给下一步建议：区分「可 assist 恢复」与「不可恢复（配送限制等）」
     let suggestion = null;
     const avail = r.signals?.availableCountries;
-    if (r.outcome === "address_incomplete" && Array.isArray(avail) && avail.length) {
-      const cc = String(opts.country || "").toLowerCase();
-      const supported = avail.some((c) => c.toLowerCase().includes(cc) || cc.includes(c.toLowerCase()));
-      suggestion = supported
-        ? "地址未完整，请核对 --region 等字段后重试。"
-        : `该商户仅配送：${avail.slice(0, 6).join(", ")}${avail.length > 6 ? " …" : ""} —— 收货国家不在其中。请换收货国家或换商户（配送限制，assist 弹窗也无法解决）。`;
-    } else if (["fill_failed", "no_card_iframe", "challenge_3ds", "challenge_captcha"].includes(r.outcome)) {
-      suggestion = "可用 --assist 重跑：弹出可见浏览器窗口，脚本填好已知信息，由用户手动补齐并点付款。";
+    const cc = String(opts.country || "").toLowerCase();
+    const shipUnsupported =
+      r.outcome === "address_incomplete" &&
+      Array.isArray(avail) &&
+      avail.length > 0 &&
+      !avail.some((c) => c.toLowerCase().includes(cc) || cc.includes(c.toLowerCase()));
+    if (shipUnsupported) {
+      // 不可恢复：该商户不配送此国家，assist 也没用
+      suggestion = `该商户仅配送：${avail.slice(0, 6).join(", ")}${avail.length > 6 ? " …" : ""} —— 收货国家不在其中。请换收货国家或换商户（配送限制，assist 弹窗也无法解决）。`;
+    } else if (["fill_failed", "no_card_iframe", "challenge_3ds", "challenge_captcha", "address_incomplete"].includes(r.outcome)) {
+      // 可恢复：用 assist 弹窗让用户补齐（State/验证码等）
+      suggestion = "可恢复：用 --assist 重跑（弹出可见浏览器窗口，脚本填好已知信息，由用户手动补齐 State/验证码等并点付款）。";
     }
 
     // 卡面绝不进 envelope，只回末 4 位与结果

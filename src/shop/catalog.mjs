@@ -7,6 +7,7 @@
  * 工具：search_catalog（自然语言搜）/ get_product（选定后取全部规格与结账链接）
  */
 import { ucpCall, GLOBAL_CATALOG_ENDPOINT, CATALOG_PROFILE, shopEndpoint } from "./ucp.mjs";
+import { COUNTRY_CODES, COUNTRIES } from "./country-data.mjs";
 
 /**
  * 语义搜索商品。
@@ -31,7 +32,7 @@ export async function searchCatalog(p) {
   if (Object.keys(filters).length) catalog.filters = filters;
 
   const context = {};
-  if (p.country) context.address_country = p.country;
+  if (p.country) context.address_country = toIso(p.country);
   if (Object.keys(context).length) catalog.context = context;
 
   catalog.pagination = { limit: p.limit || 10 };
@@ -138,6 +139,14 @@ function domainFromUrl(u) {
 function cleanDomain(d) {
   if (!d) return null;
   return String(d).replace(/^https?:\/\//, "").replace(/\/+$/, "");
+}
+
+/** 国家名或 ISO → ISO-2（UCP context.address_country 用 ISO；search --country 可传名或 ISO） */
+function toIso(c) {
+  if (!c) return c;
+  const cin = String(c).trim().toLowerCase();
+  if (/^[a-z]{2}$/.test(cin)) return cin.toUpperCase();
+  return COUNTRY_CODES[cin] || COUNTRIES.find((x) => x.name.toLowerCase() === cin)?.code || c;
 }
 
 /** 商品详情链接：用 variant 的 checkout_url，去掉 agent 追踪参数 _gsid */
