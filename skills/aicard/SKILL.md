@@ -482,6 +482,8 @@ Checkout needs the delivery address. Collect once:
 
 ⚠️ **Real charge**: issues a real virtual card from the user's wallet and submits a real order. Only run after explicit confirmation.
 
+> 💳 **支付方式校验由 CLI 内部处理，无需 agent 编排**：`shop pay` 在**点付款按钮之前**就会检测该收银台有没有信用卡选项——若该店对此收货国家只给 PayPal/钱包，返回 `card_not_supported`（**未扣款**），你据此换商户即可。不需要先跑 `--fill-only` 预检、也不用管 `payment_handlers`（那是 CLI 的事）。
+
 ```bash
 # 无需任何浏览器/超时参数：代码默认 headless（后台不弹窗）、默认不阻塞
 aicard shop pay \
