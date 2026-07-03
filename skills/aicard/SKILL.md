@@ -502,6 +502,7 @@ aicard shop pay \
   - 遇 3DS 时脚本会**自动点「下一步/发送」触发发码**（枚举 3DS iframe 里的前进按钮），日志提示「请把收到的验证码提供给我」。
   - 你**向用户要验证码**，拿到后写入 otp 文件即自动回填提交：`echo "<code>" > /tmp/aicard-otp.txt`。
   - 验证码去向：卡绑定的邮箱/手机（实测 UQPAY 发到卡注册邮箱）。
+  - ⚠️ **查进度别用 `sleep N; tail/cat`**——会被运行环境（harness）拦截（"Do not chain shorter sleeps"）。用 `run_in_background` 起进程后**直接读它的输出文件**，或用 Monitor 监听关键行（`验证码`/`outcome`）；等验证码期间无需轮询，拿到码写文件即可。
 - **`--assist` 是兜底**：仅当会话式 OTP 走不通时（脚本没点出发码按钮、或回填后仍卡住）才用——弹可见窗口让用户手动走完 3DS。不要一上来就 `--assist`。
 - 不带 `--wait-otp` 前台跑：遇 3DS 立即返回 `challenge_3ds`（不挂起），适合"先探测再决定"；真要完成付款请按上面后台 `--wait-otp` 流程。
 
