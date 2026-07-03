@@ -494,17 +494,21 @@ aicard shop pay \
 - **首次购物会自动下载浏览器内核**：`shop pay` 依赖 Playwright chromium（约 150MB）。检测到未下载时会**自动下载后继续**（进度打到 stderr，仅首次、后续复用）；首次因此会多花一两分钟属正常，不是卡死。若自动下载失败会返回 `BROWSER_INSTALL_FAILED`，转达用户手动运行 `npx playwright install chromium`。
 - **若返回 `PLAYWRIGHT_MISSING`**（playwright JS 包本身未装，多因全局安装时 optionalDependency 静默失败）：转达用户手动运行一次 `npm i -g playwright && npx playwright install chromium`，之后重试 `shop pay` 即可。
 - Envelope returns `cardSource` (`cache`|`new`), `outcome`, `cardLast4`, `order` — **never a full card number**。headless 运行、不弹窗。
-- **3DS 首选「会话式验证码」——在后台带 `--wait-otp` 运行**（这才是用户要的：3DS 时等用户在对话里给验证码，不弹浏览器）：
+- **默认：前台同步跑 `shop pay`（不带 `--wait-otp`），~30s 直接拿结果**：
   ```bash
-  # 后台运行（run_in_background），otp 文件默认 /tmp/aicard-otp.txt
+  aicard shop pay --continue-url "..." --amount ... <收货参数>
+  ```
+  - 绝大多数 3DS 是 frictionless（无感）：脚本已内置“等它自动通过”，直接返回 `success`。这是常态、一步到位。
+  - 只有**真需要验证码**的 3DS（少见）才返回 `outcome: challenge_3ds`。此时**验证未完成 = 未授权 = 未扣款**（abandoned 3DS 不产生扣款）。
+- **仅当返回 `challenge_3ds` 时，才用一次后台 `--wait-otp` 会话式补完**（不是盲目重试）：
+  ```bash
+  # run_in_background；otp 文件默认 /tmp/aicard-otp.txt
   aicard shop pay --wait-otp 600000 --continue-url "..." --amount ... <收货参数>
   ```
-  - 遇 3DS 时脚本会**自动点「下一步/发送」触发发码**（枚举 3DS iframe 里的前进按钮），日志提示「请把收到的验证码提供给我」。
-  - 你**向用户要验证码**，拿到后写入 otp 文件即自动回填提交：`echo "<code>" > /tmp/aicard-otp.txt`。
-  - 验证码去向：卡绑定的邮箱/手机（实测 UQPAY 发到卡注册邮箱）。
-  - ⚠️ **查进度别用 `sleep N; tail/cat`**——会被运行环境（harness）拦截（"Do not chain shorter sleeps"）。用 `run_in_background` 起进程后**直接读它的输出文件**，或用 Monitor 监听关键行（`验证码`/`outcome`）；等验证码期间无需轮询，拿到码写文件即可。
-- **`--assist` 是兜底**：仅当会话式 OTP 走不通时（脚本没点出发码按钮、或回填后仍卡住）才用——弹可见窗口让用户手动走完 3DS。不要一上来就 `--assist`。
-- 🚫 **真实购买一律直接用后台 `--wait-otp` 跑，不要"先不带 --wait-otp 探测一次再跑"**：探测那次也会点 Pay，若命中 3DS，再另起一次 `--wait-otp` 就是**第二次点 Pay = 重复扣款风险**。一次到位:确认下单后就后台 `--wait-otp`，3DS 在同一 session 内回填完成。
+  - 脚本自动点「下一步/发送」触发发码 → 提示“请把验证码给我” → 你向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 自动回填提交。验证码发到卡绑定邮箱/手机。
+  - ⚠️ 查进度别用 `sleep N; tail/cat`（会被 harness 拦）；用 `run_in_background` + 直接读输出文件或 Monitor 监听 `验证码`/`outcome`。
+  - `--assist`（弹窗人工完成）只在会话式 OTP 也走不通时才用。
+- 🚫 **绝不因 `challenge_3ds` 反复用不带 --wait-otp 重跑**——补完 3DS 只用**一次** `--wait-otp`。`pending`/`error`（点过 Pay、结果不明）则一律不重跑、先核实（见下方防重复扣款铁律）。
 
 **Card selection is automatic (no wallet needed if a card exists)**:
 1. `pay` first reuses a **cached card** whose face value ≥ order total → skips the wallet entirely.
@@ -513,15 +517,16 @@ aicard shop pay \
 
 Use `aicard shop cards` to list cached cards (masked last-4 only).
 
-> 🚫 **防重复扣款铁律（最高优先级）**：**脚本/agent 绝不自动重试付款**。任何非 `success` 结果都**只报告状态 + 展示 `envelope.suggestion`**，是否再下单**完全由用户手动决定**。
-> - 尤其 `signals.paySubmitted === true`（已点过 Pay）且结果非 `success`/`declined`（`challenge_3ds`/`pending`/`error`）：**款可能已扣**，绝不重跑 `shop pay`。先核实是否成交（收货邮箱确认邮件 / `~/.aicard/receipts` 凭证图 / 商户订单）。
-> - 3DS 的正确完成方式是**同一次 `--wait-otp` 会话内回填验证码**，绝不另起新付款。
-> - 即便是"未扣款"的付款前失败（`shipping_not_ready`/`checkout_unavailable`/`fill_failed`/`no_card_iframe`/`address_incomplete`，`paySubmitted:false`），也**不要自动重跑**——报告后由用户决定是否再来一单。
+> 🚫 **防重复扣款铁律（最高优先级）**：agent **绝不盲目重跑付款**。分两类：
+> - **`pending` / `error`（`paySubmitted:true`、结果真不明）**：**款可能已扣**，**绝对禁止重跑** `shop pay`。先核实是否成交（收货邮箱确认邮件 / `~/.aicard/receipts` 凭证图 / 商户订单），再由用户决定。
+> - **`challenge_3ds` / `challenge_captcha`（验证未完成 = 未授权 = 未扣款）**：这是**唯一**可"补完"的情形——用**一次**后台 `--wait-otp` 会话式回填验证码即可（见上）。**只补一次**，别反复重跑。
+> - 其余"点 Pay 之前"的失败（`shipping_not_ready`/`checkout_unavailable`/`fill_failed`/`no_card_iframe`/`address_incomplete`，`paySubmitted:false`，均未扣款）：只报告，是否再来一单由用户决定，agent 不自动重跑。
 
-| `outcome` | Meaning | Next（一律不自动重试，报告+等用户决定） |
+| `outcome` | Meaning | Next |
 | --- | --- | --- |
-| `success` | Paid, order placed | 展示 `receipt`（见下）；给出本地凭证图路径 `receipt.proofImage` |
-| `challenge_3ds` / `challenge_captcha` | 已点付款、需用户验证码（`paySubmitted:true`） | **同一次**后台 `--wait-otp` 内完成：脚本自动发码 → 向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 回填。**绝不另起新付款**。注：多数 3DS 是 frictionless（脚本已等它自动通过），走到这里多是真需要码 |
+| `success` | 已下单成交 | 展示 `receipt`（见下）；给出本地凭证图路径 `receipt.proofImage` |
+| `challenge_3ds` / `challenge_captcha` | 需用户验证码（**验证未完成=未扣款**） | 用**一次**后台 `--wait-otp` 补完：脚本自动发码 → 向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 回填。别反复重跑 |
+| `pending` / `error` | 已点 Pay、结果不明（`paySubmitted:true`） | ⚠️ **款可能已扣，禁止重跑**。先核实(邮件/凭证图/商户订单)再由用户决定 |
 | `declined` | 卡被拒（**未扣款**） | 展示 `signals.formError`；报告后由用户决定是否换卡再发起 |
 | `shipping_not_ready` | 配送方式始终未加载（**未扣款、未下单**） | 报告；是否稍后重发由用户决定 |
 | `fill_failed` / `no_card_iframe` | 填单未完成、未提交（**未扣款**） | 报告；由用户决定用 `--assist` 手动完成或重发 |

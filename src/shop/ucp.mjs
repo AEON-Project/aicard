@@ -121,8 +121,18 @@ async function ucpCallOnce(endpoint, toolName, args, opts = {}) {
 
   const result = json.result ?? {};
   if (result.isError) {
-    const msg = result.content?.map((c) => c.text).filter(Boolean).join(" ") || "UCP tool error";
-    throw new UcpError("UCP_TOOL_ERROR", msg);
+    const raw = result.content?.map((c) => c.text).filter(Boolean).join(" ") || "UCP tool error";
+    // UCP 把可读原因放在 payload 的 messages[]，其余是一大坨 profile/capabilities。提取 messages 作为人类可读错误。
+    let msg = raw;
+    let messages;
+    try {
+      const p = JSON.parse(raw);
+      if (Array.isArray(p?.messages) && p.messages.length) {
+        msg = p.messages.map((m) => m.content).filter(Boolean).join("; ") || raw;
+        messages = p.messages.map((m) => ({ code: m.code, content: m.content, severity: m.severity, path: m.path }));
+      }
+    } catch { /* 非 JSON：用原文 */ }
+    throw new UcpError("UCP_TOOL_ERROR", msg.slice(0, 400), messages ? { messages } : {});
   }
 
   // 结构化内容优先；否则解析首个 text content（UCP 常把 payload 作为 JSON 字符串放这里）

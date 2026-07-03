@@ -103,7 +103,14 @@ export async function cart(opts) {
       expiresAt: c.expiresAt,
     });
   } catch (e) {
-    emitErr("shop.cart", e.code || "SHOP_CART_FAILED", { message: e.message, retryAfter: e.retryAfter });
+    // variant 不存在：多因把 Global 目录的 variant 丢给 storefront。给可操作提示。
+    const notFound = /does not exist|not found/i.test(e.message || "") && /variant/i.test(JSON.stringify(e.messages || e.message || ""));
+    emitErr("shop.cart", notFound ? "VARIANT_NOT_FOUND" : e.code || "SHOP_CART_FAILED", {
+      message: e.message,
+      ...(e.messages ? { messages: e.messages } : {}),
+      ...(notFound ? { hint: "该 variant 在此商户不存在。请用 `shop search --shop <该商户域名> --query \"<商品名>\"` 重新取该店的 variantId 再建车（勿用 Global get_product 里的变体，可能与 storefront 不一致）。" } : {}),
+      retryAfter: e.retryAfter,
+    });
   }
 }
 
@@ -223,12 +230,19 @@ export async function pay(opts) {
     const paid = !!r.signals?.paySubmitted;
     if (r.outcome === "success") {
       // 成功，无需建议
-    } else if (paid && r.outcome !== "declined") {
-      // 点过 Pay、结果未确认（challenge_3ds / pending / error）——款可能已扣
+    } else if (r.outcome === "challenge_3ds" || r.outcome === "challenge_captcha") {
+      // 真 3DS 挑战：验证未完成 = 未授权 = 未扣款。完成方式=用一次后台 --wait-otp 会话式回填验证码
+      //（这不是盲目重试；abandoned 3DS 不产生扣款，故安全）。
+      suggestion =
+        "本单需要 3DS 验证码（当前验证未完成 = 未授权 = 未扣款）。要完成：改用后台 " +
+        "`aicard shop pay --wait-otp 600000 …`（同参数）再走一次，遇“请把验证码给我”时把码 `echo` 到 " +
+        "/tmp/aicard-otp.txt 自动回填。切勿用不带 --wait-otp 反复重跑。";
+    } else if (paid) {
+      // pending / error：点过 Pay 但结果真不明 → 危险，禁止重跑
       suggestion =
         `⚠️ 已提交付款但结果未确认（${r.outcome}）——款项【可能已成功扣除】。` +
-        `脚本不会自动重试。请勿重跑 shop pay（会重复扣款）。请核实是否已成交` +
-        `（收货邮箱的商户确认邮件 / 本地 ~/.aicard/receipts 凭证图 / 商户订单页），再由你决定后续。`;
+        `禁止重跑 shop pay（会重复扣款）。请先核实是否已成交` +
+        `（收货邮箱确认邮件 / 本地 ~/.aicard/receipts 凭证图 / 商户订单页），再由你决定后续。`;
     } else if (r.outcome === "declined") {
       suggestion = "卡被拒（未扣款）。脚本不自动重试；如需换卡/改信息，由你重新发起。";
     } else if (r.outcome === "shipping_not_ready") {

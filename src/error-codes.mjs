@@ -45,6 +45,7 @@ export const ERROR_CODES = {
   MISSING_ID:             { exit: 1, message: "Missing product id (--id)." },
   MISSING_SHOP:           { exit: 1, message: "Missing merchant domain (--shop)." },
   MISSING_VARIANT:        { exit: 1, message: "Missing ProductVariant id (--variant)." },
+  VARIANT_NOT_FOUND:      { exit: 1, message: "ProductVariant does not exist at this merchant. Re-resolve via `shop search --shop <domain>`." },
   MISSING_SHIPPING_FIELDS:{ exit: 1, message: "Missing required shipping fields." },
   INVALID_EMAIL:          { exit: 1, message: "Invalid email." },
   INVALID_COUNTRY:        { exit: 1, message: "Unknown country name or ISO code." },
