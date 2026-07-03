@@ -202,7 +202,7 @@ shop
   .option("--fill-only", "Fill card but do NOT submit (test only, no charge)", false)
   .option("--allow-test", "允许在测试店后端下单（默认拦截 twinoakstest 等测试店）", false)
   .option("--wait-otp <ms>", "On 3DS/captcha, wait for OTP relay file up to N ms")
-  .option("--otp-file <path>", "OTP relay file path (default ./otp.txt)")
+  .option("--otp-file <path>", "OTP relay file path (default /tmp/aicard-otp.txt)")
   .option("--out <dir>", "Screenshot output dir (default ./artifacts)")
   .action(async (opts) => {
     const { pay } = await import("../src/commands/shop.mjs");

@@ -56,7 +56,7 @@ async function textOf(locator) {
  * @param {boolean} [p.headful=false]
  * @param {boolean} [p.noSubmit=false] - 只填不提交（测试用）
  * @param {number} [p.waitOtpMs=0] - 遇挑战时等待验证码回填的最长时长
- * @param {string} [p.otpFile="./otp.txt"]
+ * @param {string} [p.otpFile="/tmp/aicard-otp.txt"]
  * @param {string} [p.outDir="./artifacts"]
  * @param {(msg:string)=>void} [p.onProgress]
  * @returns {Promise<{outcome:string, signals:object, artifacts:string[], order:object|null}>}
@@ -73,7 +73,7 @@ export async function fillCheckout(p) {
   if (!p.card?.number || !p.card?.expiry || !p.card?.cvc) throw new FillError("NO_CARD", "缺少完整卡面");
 
   const outDir = pathResolve(p.outDir || "./artifacts");
-  const otpFile = pathResolve(p.otpFile || "./otp.txt");
+  const otpFile = pathResolve(p.otpFile || "/tmp/aicard-otp.txt");
   const waitOtpMs = Number(p.waitOtpMs || 0);
   const log = p.onProgress || (() => {});
   mkdirSync(outDir, { recursive: true });
@@ -553,18 +553,18 @@ export async function extractOrder(page) {
     )
     .catch(() => []);
   // 感谢页金额明细（权威最终扣款额只在此处：--amount 只是商品价，运费/税是收银台结算才加的）。
-  // 稳健取值：按标签行首锚定 + 读该行整段文本 + 只认带货币符号的金额，尽量避免抓错。
-  const money = async (re) => {
-    const loc = page.getByText(re);
-    if (!(await loc.count().catch(() => 0))) return null;
-    const txt = await loc.last().evaluate((el) => el.parentElement?.textContent || el.textContent || "").catch(() => null);
-    const mm = txt && txt.match(/[£$€¥]\s?[\d,]+\.\d{2}/);
-    return mm ? mm[0].replace(/\s/g, "") : null;
-  };
-  const total = await money(/^\s*(total|order total|合计|总计)\s*$/i) || await money(/^\s*total\b/i);
-  const subtotal = await money(/^\s*(subtotal|小计)\b/i);
-  const shippingFee = await money(/^\s*(shipping|delivery|运费|配送)\b/i);
-  const tax = await money(/^\s*(estimated tax|taxes?|vat|税)\b/i);
+  // 对订单汇总区整段文本做正则：兼容“标签与金额连写”（如 igloocoolers 的 "TotalUSD$24.63"），
+  // \b 词边界在这种连写下会失配，故改用“标签 + 少量非数字字符 + 货币金额”。
+  let sumText = await textOf(page.locator('[aria-label*="order summary" i],[class*="order-summary" i],[class*="summary" i]').first());
+  if (!sumText || !/[£$€¥]/.test(sumText)) sumText = (await page.locator("body").textContent().catch(() => "")) || "";
+  sumText = sumText.replace(/\s+/g, " ");
+  const pick = (re) => { const mm = sumText.match(re); return mm ? mm[1].replace(/\s/g, "") : null; };
+  const CUR = "([£$€¥][\\d,]+\\.\\d{2})";
+  const subtotal = pick(new RegExp("subtotal\\D{0,12}?" + CUR, "i"));
+  const shippingFee = pick(new RegExp("(?:shipping|delivery)\\D{0,20}?" + CUR, "i"));
+  const tax = pick(new RegExp("tax(?:es)?\\D{0,12}?" + CUR, "i"));
+  // 合计：Total 但排除 Subtotal（lookbehind），取其后第一个货币金额
+  const total = pick(new RegExp("(?<!sub)total\\D{0,12}?" + CUR, "i"));
   // 配送方式（"Shipping method" 标题下一行）
   const shippingMethod = await textOf(
     page.getByText(/shipping method|配送方式|运送方式/i).locator("xpath=following::*[1]")

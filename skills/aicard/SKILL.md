@@ -453,7 +453,7 @@ First collect ship-to **country + postal code** (affects tax/shipping):
 aicard shop cart --shop <merchantDomain> --variant <variantId> [--qty 1] --country US --zip 10001
 ```
 
-> ⚠️ **测试店检测（重要）**：`cart` 返回里若 `testBackend:true`，说明该商户收银台**后端是测试店**（如 `twinoakstest.myshopify.com`）——有些商户用自定义域名（如 `naturallife.com`）套在测试店上，光看域名看不出来，只有 `continueUrl` 的后端 host 才暴露。**这种下单不是真实交易**。`shop pay` **默认会拦截**（`TEST_STORE_BLOCKED`）；遇到就**告知用户该商户是测试店、换一家真实商户**，不要盲目加 `--allow-test`（仅内部测试才用）。
+> ⚠️ **测试店检测（重要）**：`cart` 返回里若 `testBackend:true`，说明该商户收银台**后端是测试店**（如 `twinoakstest.myshopify.com`）——有些商户用自定义域名（如 `naturallife.com`）套在测试店上，光看域名看不出来，只有 `continueUrl` 的后端 host 才暴露。**这种下单不是真实交易**。`shop pay` 遇到会返回 `TEST_STORE_BLOCKED`（这是**确认门、不是死路**，`needsConfirm:true`）。正确做法：**提示用户"该商户是测试店，下单非真实交易"并询问是否继续**；用户回复"继续"就加 `--allow-test` 重跑往下走；用户想换商户则换。不要擅自 `--allow-test`，也不要直接放弃。
 
 Show the breakdown, then **先查缓存卡再给确认话术**（`aicard shop cards`，找 `used:false && amount ≥ total` 的卡），据此二选一：
 
@@ -493,10 +493,17 @@ aicard shop pay \
 
 - **首次购物会自动下载浏览器内核**：`shop pay` 依赖 Playwright chromium（约 150MB）。检测到未下载时会**自动下载后继续**（进度打到 stderr，仅首次、后续复用）；首次因此会多花一两分钟属正常，不是卡死。若自动下载失败会返回 `BROWSER_INSTALL_FAILED`，转达用户手动运行 `npx playwright install chromium`。
 - **若返回 `PLAYWRIGHT_MISSING`**（playwright JS 包本身未装，多因全局安装时 optionalDependency 静默失败）：转达用户手动运行一次 `npm i -g playwright && npx playwright install chromium`，之后重试 `shop pay` 即可。
-- **默认就是对的**：代码默认 `headless`（后台运行、不弹浏览器窗口）+ 默认不阻塞（不传 `--wait-otp` 时，遇 3DS 直接返回 `outcome: challenge_3ds`，**不会挂起超时**）。不要画蛇添足加 `--headful`（弹窗等人）或前台 `--wait-otp`（阻塞超时）。
-- Envelope returns `cardSource` (`cache`|`new`), `outcome`, `cardLast4`, `order` — **never a full card number**.
-- **3DS 一律用 `--assist` 弹窗**：真实 3DS 常是**多步**（实测 UQPAY：选认证方式 → 点 Next → OTP 发到卡绑定邮箱 → 输入 → 提交）。headless 的文本 OTP 回填（`--wait-otp` + otp 文件）**只能填最后的 OTP 框、点不了前面的 Next，对多步 3DS 无效**。所以遇 `challenge_3ds` 就用 `--assist`：弹出可见窗口，让用户自己走完 3DS（点 Next、去邮箱/手机收 OTP、输入、提交），脚本轮询到成功页自动收尾。
-- `--wait-otp <ms> --otp-file <path>`（后台运行 + `echo "<code>" > <path>` 回填）**仅保留给极少数「单步纯 OTP 输入框」**的 3DS；多步 3DS 请勿用它。
+- Envelope returns `cardSource` (`cache`|`new`), `outcome`, `cardLast4`, `order` — **never a full card number**。headless 运行、不弹窗。
+- **3DS 首选「会话式验证码」——在后台带 `--wait-otp` 运行**（这才是用户要的：3DS 时等用户在对话里给验证码，不弹浏览器）：
+  ```bash
+  # 后台运行（run_in_background），otp 文件默认 /tmp/aicard-otp.txt
+  aicard shop pay --wait-otp 600000 --continue-url "..." --amount ... <收货参数>
+  ```
+  - 遇 3DS 时脚本会**自动点「下一步/发送」触发发码**（枚举 3DS iframe 里的前进按钮），日志提示「请把收到的验证码提供给我」。
+  - 你**向用户要验证码**，拿到后写入 otp 文件即自动回填提交：`echo "<code>" > /tmp/aicard-otp.txt`。
+  - 验证码去向：卡绑定的邮箱/手机（实测 UQPAY 发到卡注册邮箱）。
+- **`--assist` 是兜底**：仅当会话式 OTP 走不通时（脚本没点出发码按钮、或回填后仍卡住）才用——弹可见窗口让用户手动走完 3DS。不要一上来就 `--assist`。
+- 不带 `--wait-otp` 前台跑：遇 3DS 立即返回 `challenge_3ds`（不挂起），适合"先探测再决定"；真要完成付款请按上面后台 `--wait-otp` 流程。
 
 **Card selection is automatic (no wallet needed if a card exists)**:
 1. `pay` first reuses a **cached card** whose face value ≥ order total → skips the wallet entirely.
@@ -508,7 +515,7 @@ Use `aicard shop cards` to list cached cards (masked last-4 only).
 | `outcome` | Meaning | Next |
 | --- | --- | --- |
 | `success` | Paid, order placed | 展示 `receipt`（见下）；给出本地凭证图路径 `receipt.proofImage` |
-| `challenge_3ds` / `challenge_captcha` | Needs the user's verification code | Ask the user for the code and relay it; the run auto-continues |
+| `challenge_3ds` / `challenge_captcha` | 需要用户验证码 | 用**后台 `--wait-otp` 运行**：脚本自动触发发码 → 向用户要验证码 → `echo "<code>" > /tmp/aicard-otp.txt` 自动回填。走不通再 `--assist` 兜底 |
 | `declined` | Card/info rejected | Show `signals.formError`; suggest retry |
 | `fill_failed` | Card fields not injectable (checkout changed) | Report; do not retry blindly |
 | `no_card_iframe` | Not a payment page / redirected | Re-open from a fresh `cart` |

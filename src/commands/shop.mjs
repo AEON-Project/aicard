@@ -120,8 +120,9 @@ export async function pay(opts) {
     const { isTestStore } = await import("../shop/catalog.mjs");
     if (isTestStore(backendHost) && !opts.allowTest) {
       return emitErr("shop.pay", "TEST_STORE_BLOCKED", {
-        message: `收银台后端是测试店（${backendHost}），下单不是真实交易，已拦截。若确需在测试店下单，加 --allow-test。`,
+        message: `该商户收银台后端是测试店（${backendHost}），下单不是真实交易。请提示用户并询问是否继续；用户确认后加 --allow-test 重跑即可继续。`,
         backendHost,
+        needsConfirm: true, // 非死路：这是"确认门"，用户同意后 --allow-test 放行
       });
     }
 
