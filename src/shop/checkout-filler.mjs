@@ -240,6 +240,7 @@ export async function fillCheckout(p) {
       if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(1500); }
     }
     // 等配送方式真正加载完（骨架→真实单选项）再填卡：Shopify 在配送方式解析完成后会重渲染 payment 区，过早填卡会被清空
+    log("等待配送方式加载…"); // 收银台算运费率可能较久（最多约 45s），此处给出进度、避免看着像卡住
     const ship = await waitShippingReady(page);
     result.signals.shippingReady = ship.picked;
     _perf("shipping-ready");
@@ -337,6 +338,7 @@ export async function fillCheckout(p) {
     // 轮询上限放大到 ~90s：付款 "Processing…"（含 frictionless 3DS + 建单）在慢网络下可能 >20s，
     // 过早返回 pending 会造成“款可能已扣但状态未知”的危险模糊态。success/declined/真挑战都提前退出，
     // 只有真正慢/卡的情况才等满。
+    log("等待支付结果…"); // 处理/建单/frictionless 3DS 可能持续几十秒，给出进度
     let outcome = "pending";
     let challengeStreak = 0;
     for (let i = 0; i < 90; i++) {
