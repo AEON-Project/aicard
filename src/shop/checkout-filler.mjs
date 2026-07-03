@@ -103,13 +103,25 @@ export async function fillCheckout(p) {
     result.artifacts.push(path);
     return path;
   };
+  const same = (a, b) => String(a).replace(/\s/g, "").toLowerCase() === String(b).replace(/\s/g, "").toLowerCase();
   const fill = async (sel, val) => {
     if (val == null) return false;
     const el = page.locator(sel).first();
     try {
       await el.waitFor({ state: "visible", timeout: 6000 });
       await el.fill(String(val));
-      return true;
+      // 回读验证：自动补全控件（如 Shopify 地址栏 Google Places）会把直接塞入的纯文本清掉 → 值留不住。
+      let v = await el.inputValue().catch(() => "");
+      if (!same(v, val)) {
+        // 兜底：逐字符输入触发控件、等下拉出现、Esc 关下拉保留已输入文本，再回读。
+        await el.click().catch(() => {});
+        await el.fill("").catch(() => {});
+        await el.type(String(val), { delay: 30 });
+        await page.waitForTimeout(500); // 等自动补全下拉渲染
+        await page.keyboard.press("Escape").catch(() => {}); // 关下拉、保留输入的文本
+        v = await el.inputValue().catch(() => "");
+      }
+      return v.trim().length > 0;
     } catch {
       return false;
     }
