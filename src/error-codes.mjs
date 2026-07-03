@@ -62,6 +62,8 @@ export const ERROR_CODES = {
   SHOP_CARDS_FAILED:      { exit: 3, message: "Listing cached cards failed." },
   CARD_ISSUE_FAILED:      { exit: 3, message: "Card issuance failed." },
   CARD_NOT_READY:         { exit: 3, message: "Card issued but full details not ready." },
+  PLAYWRIGHT_MISSING:     { exit: 3, message: "Playwright not installed. Run: npm i -g playwright && npx playwright install chromium" },
+  BROWSER_INSTALL_FAILED: { exit: 3, message: "Browser engine download failed. Run: npx playwright install chromium" },
   UCP_NETWORK:            { exit: 3, message: "UCP request failed (network)." },
   UCP_RATE_LIMITED:       { exit: 3, message: "Rate limited by UCP endpoint." },
   UCP_RPC_ERROR:          { exit: 3, message: "UCP RPC error." },

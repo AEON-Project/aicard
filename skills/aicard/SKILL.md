@@ -21,7 +21,7 @@ description: >
 emoji: "💳"
 homepage: https://github.com/AEON-Project/aicard
 metadata:
-  version: "0.9.6"
+  version: "0.9.7"
   author: AEON-Project
   openclaw:
     requires:
@@ -486,6 +486,8 @@ aicard shop pay \
   [--phone <phone>] [--region "<State>"]
 ```
 
+- **首次购物会自动下载浏览器内核**：`shop pay` 依赖 Playwright chromium（约 150MB）。检测到未下载时会**自动下载后继续**（进度打到 stderr，仅首次、后续复用）；首次因此会多花一两分钟属正常，不是卡死。若自动下载失败会返回 `BROWSER_INSTALL_FAILED`，转达用户手动运行 `npx playwright install chromium`。
+- **若返回 `PLAYWRIGHT_MISSING`**（playwright JS 包本身未装，多因全局安装时 optionalDependency 静默失败）：转达用户手动运行一次 `npm i -g playwright && npx playwright install chromium`，之后重试 `shop pay` 即可。
 - **默认就是对的**：代码默认 `headless`（后台运行、不弹浏览器窗口）+ 默认不阻塞（不传 `--wait-otp` 时，遇 3DS 直接返回 `outcome: challenge_3ds`，**不会挂起超时**）。不要画蛇添足加 `--headful`（弹窗等人）或前台 `--wait-otp`（阻塞超时）。
 - Envelope returns `cardSource` (`cache`|`new`), `outcome`, `cardLast4`, `order` — **never a full card number**.
 - **3DS 一律用 `--assist` 弹窗**：真实 3DS 常是**多步**（实测 UQPAY：选认证方式 → 点 Next → OTP 发到卡绑定邮箱 → 输入 → 提交）。headless 的文本 OTP 回填（`--wait-otp` + otp 文件）**只能填最后的 OTP 框、点不了前面的 Next，对多步 3DS 无效**。所以遇 `challenge_3ds` 就用 `--assist`：弹出可见窗口，让用户自己走完 3DS（点 Next、去邮箱/手机收 OTP、输入、提交），脚本轮询到成功页自动收尾。

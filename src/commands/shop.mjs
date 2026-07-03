@@ -196,7 +196,10 @@ export async function pay(opts) {
       Array.isArray(avail) &&
       avail.length > 0 &&
       !avail.some((c) => c.toLowerCase().includes(cc) || cc.includes(c.toLowerCase()));
-    if (shipUnsupported) {
+    if (r.outcome === "checkout_unavailable") {
+      // 不可恢复：收银台链接失效/过期，assist 也没用，必须重新建车
+      suggestion = "收银台链接已失效或过期。请用 `shop cart` 重新生成 continueUrl 后再 `shop pay`（assist 也无法救活死链）。";
+    } else if (shipUnsupported) {
       // 不可恢复：该商户不配送此国家，assist 也没用
       suggestion = `该商户仅配送：${avail.slice(0, 6).join(", ")}${avail.length > 6 ? " …" : ""} —— 收货国家不在其中。请换收货国家或换商户（配送限制，assist 弹窗也无法解决）。`;
     } else if (["fill_failed", "no_card_iframe", "challenge_3ds", "challenge_captcha", "address_incomplete"].includes(r.outcome)) {

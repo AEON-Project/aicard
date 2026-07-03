@@ -17,6 +17,9 @@ const PKG_NAME = "@aeon-ai-pay/aicard";
  * @param {string} currentVersion
  */
 export function checkForUpdates(currentVersion) {
+  // 禁用开关：本地开发（npm link 到源码）时设 AICARD_NO_UPDATE=1，
+  // 否则后台自动 `npm install -g` 会把 link 覆盖回 registry 版，本地改动跑不到。
+  if (["1", "true", "yes"].includes(String(process.env.AICARD_NO_UPDATE || "").toLowerCase())) return;
   // 同步快速检查最新版本（超时短，不阻塞太久）
   let latest;
   try {

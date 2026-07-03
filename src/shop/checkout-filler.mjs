@@ -34,6 +34,17 @@ const INPUT = {
   name: 'input[name="name"],input[autocomplete="cc-name"]',
 };
 
+// 存在性文本探测：先 count() 即时判断——避免 textContent() 在元素不存在时自动等满默认超时（30s）。
+// 这是关键性能修复：地址错误/拒付/确认号等探测在“无匹配”时都会命中该陷阱。
+async function textOf(locator) {
+  try {
+    if (!(await locator.count())) return null;
+    return await locator.first().textContent({ timeout: 1500 });
+  } catch {
+    return null;
+  }
+}
+
 // COUNTRY_CODES 来自 country-data.mjs（含权威 201 国 + 常见简称别名，单一事实源；见顶部 import）
 
 /**
@@ -55,7 +66,7 @@ export async function fillCheckout(p) {
   try {
     ({ chromium } = await import("playwright"));
   } catch {
-    throw new FillError("PLAYWRIGHT_MISSING", "未安装 playwright。请在项目内运行：npm i playwright && npx playwright install chromium");
+    throw new FillError("PLAYWRIGHT_MISSING", "未安装 playwright。请运行：npm i -g playwright && npx playwright install chromium");
   }
 
   if (!p.continueUrl) throw new FillError("NO_URL", "缺少 continueUrl");
@@ -70,11 +81,13 @@ export async function fillCheckout(p) {
 
   const A = p.address || {};
   const result = { outcome: null, signals: {}, artifacts: [], order: null };
+  const _t0 = Date.now();
+  const _perf = (s) => { if (process.env.AICARD_PERF) console.error(`[perf] ${s}: ${((Date.now() - _t0) / 1000).toFixed(1)}s`); };
 
-  const browser = await chromium.launch({
+  const browser = await launchWithAutoInstall(chromium, {
     headless: !(p.headful || p.assist), // assist 兜底模式强制可见窗口，让用户手动完成
     args: ["--disable-blink-features=AutomationControlled"],
-  });
+  }, log);
   const ctx = await browser.newContext({
     locale: "en-US",
     viewport: { width: 1280, height: 1600 },
@@ -104,9 +117,42 @@ export async function fillCheckout(p) {
 
   try {
     log("打开收银台…");
-    await page.goto(p.continueUrl, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(3000);
+    // waitUntil:"commit" 一提交导航即返回（比 domcontentloaded 快很多，重页面不会卡）；
+    // 网络抖动重试：最多 3 次，命中即返回；全失败也不硬崩，交给下方早检判断可用性。
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await page.goto(p.continueUrl, { waitUntil: "commit", timeout: 20000 });
+        break;
+      } catch {
+        if (attempt < 3) { log(`收银台加载超时，重试 ${attempt}/2…`); await page.waitForTimeout(1000); }
+      }
+    }
+    await page.waitForTimeout(800);
     await shot("01-open");
+
+    // 收银台有效性早检（两段，避免误杀“正在加载骨架”的有效收银台）：
+    // ① 立即检测明确死链文案——死链（404）会即时显示错误页；用 checkout/payment 关键词兜底防误判。
+    const earlyBody = (await page.locator("body").textContent().catch(() => "")) || "";
+    if (/\b404\b|not found|page not found|页面不存在|无法找到/i.test(earlyBody) && !/checkout|payment|shipping|收银|付款/i.test(earlyBody)) {
+      result.outcome = "checkout_unavailable";
+      result.signals.reason = "收银台链接无效或已过期（404）。请用 `shop cart` 重新生成 continueUrl 后再付款。";
+      await shot("01b-unavailable");
+      return finish(browser, result);
+    }
+    // ② 有效收银台可能仍在渲染骨架——给表单字段充足时间出现（命中即退，正常网络 1-3s）。
+    //    30s 仍不出现才判失效（真死链已被 ① 快速拦截，走到这里多是网络异常）。
+    const checkoutReady = await page
+      .locator('input[type="email"],input[name="email"],select[name*="country" i],input[autocomplete="address-line1"],input[name="address1"]')
+      .first()
+      .waitFor({ state: "visible", timeout: 30000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!checkoutReady) {
+      result.outcome = "checkout_unavailable";
+      result.signals.reason = "收银台表单 30s 内未加载出来（网络异常或链接失效）。请检查网络或用 `shop cart` 重新生成 continueUrl。";
+      await shot("01b-unavailable");
+      return finish(browser, result);
+    }
 
     // 国家（先选，电话/邮编校验依赖它）——等 options 加载 + label/ISO 代码多重匹配 + 切换后等字段重渲染
     if (A.country) {
@@ -114,36 +160,40 @@ export async function fillCheckout(p) {
       if (await country.count()) {
         try {
           await country.waitFor({ state: "visible", timeout: 6000 });
-          await page.waitForTimeout(500);
+          await page.waitForTimeout(200);
           const cc = COUNTRY_CODES[A.country.toLowerCase()] || (/^[a-z]{2}$/i.test(A.country.trim()) ? A.country.trim().toUpperCase() : null);
           result.signals.countrySelected = await selectOptionSmart(country, A.country, cc);
-          await page.waitForTimeout(800); // 国家切换后地址/电话字段会重渲染
+          await page.waitForTimeout(400); // 国家切换后地址/电话字段会重渲染
         } catch {
           result.signals.countrySelected = false;
         }
       }
     }
     log("填写收货信息…");
-    await fill('input[type="email"],input[name="email"],input#email', A.email);
-    await fill('input[autocomplete="given-name"],input[name="firstName"]', A.first);
-    await fill('input[autocomplete="family-name"],input[name="lastName"]', A.last);
-    await fill('input[autocomplete="address-line1"],input[name="address1"]', A.address1);
-    if (A.address2) await fill('input[autocomplete="address-line2"],input[name="address2"]', A.address2);
-    await fill('input[autocomplete="address-level2"],input[name="city"],input[placeholder*="City" i],input[placeholder*="城市" i]', A.city);
-    await fill('input[autocomplete="postal-code"],input[name="postalCode"],input[name="zip"],input[placeholder*="Postal" i],input[placeholder*="邮政" i]', A.zip);
-    await fill('input[autocomplete="tel"],input[type="tel"]', A.phone);
+    // 各收货字段相互独立 → 并行填（fill 用 el.fill 直接赋值，非逐字符，可并发；worst-case 取最慢字段而非累加）。
+    // 国家已先选完（region 依赖它），此处只并行文本字段。
+    await Promise.all([
+      fill('input[type="email"],input[name="email"],input#email', A.email),
+      fill('input[autocomplete="given-name"],input[name="firstName"]', A.first),
+      fill('input[autocomplete="family-name"],input[name="lastName"]', A.last),
+      fill('input[autocomplete="address-line1"],input[name="address1"]', A.address1),
+      A.address2 ? fill('input[autocomplete="address-line2"],input[name="address2"]', A.address2) : Promise.resolve(),
+      fill('input[autocomplete="address-level2"],input[name="city"],input[placeholder*="City" i],input[placeholder*="城市" i]', A.city),
+      fill('input[autocomplete="postal-code"],input[name="postalCode"],input[name="zip"],input[placeholder*="Postal" i],input[placeholder*="邮政" i]', A.zip),
+      fill('input[autocomplete="tel"],input[type="tel"]', A.phone),
+    ]);
     if (A.region) {
-      // State/省 下拉常在国家选中后才异步出现，轮询等它出现（最多 ~5.6s）
+      // State/省 下拉常在国家选中后才异步出现，快轮询等它出现（~4s 上限，命中即退）
       let st = null;
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < 16; i++) {
         const cand = page.locator('select[autocomplete*="address-level1" i],select[name="zone" i],select[name*="province" i],select[name*="state" i]').first();
         if (await cand.count()) { st = cand; break; }
-        await page.waitForTimeout(700);
+        await page.waitForTimeout(250);
       }
       if (st) {
         try {
-          await st.waitFor({ state: "visible", timeout: 5000 });
-          await page.waitForTimeout(500); // 等 options 异步加载
+          await st.waitFor({ state: "visible", timeout: 4000 });
+          await page.waitForTimeout(250); // 等 options 异步加载
           result.signals.regionSelected = await selectOptionSmart(st, A.region, null);
         } catch {
           result.signals.regionSelected = false;
@@ -153,9 +203,10 @@ export async function fillCheckout(p) {
       }
     }
     await shot("02-address");
+    _perf("address-filled");
 
     // 地址校验错误检测（国家/州未选中等）→ 明确报错，不带着错误往下跑到迷惑的 fill_failed
-    const addrErr = await page.getByText(/select a country|select a state|select a province|enter a valid|请选择|请输入有效/i).first().textContent().catch(() => null);
+    const addrErr = await textOf(page.getByText(/select a country|select a state|select a province|enter a valid|请选择|请输入有效/i));
     if (addrErr) result.signals.addressError = addrErr.trim().slice(0, 120);
     if (A.country && result.signals.countrySelected === false) {
       // dump 该收银台实际支持的国家，准确定位（可能商户不配送该地区，而非名称问题）
@@ -188,22 +239,25 @@ export async function fillCheckout(p) {
     // 多步 checkout：逐个点“继续”把支付区带出来
     for (const label of ["Continue to shipping", "继续", "Continue to payment", "Continue"]) {
       const b = page.locator(`button:has-text("${label}")`).first();
-      if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(4000); }
+      if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(1500); }
     }
     // 等配送方式真正加载完（骨架→真实单选项）再填卡：Shopify 在配送方式解析完成后会重渲染 payment 区，过早填卡会被清空
     await waitShippingReady(page);
+    _perf("shipping-ready");
     await shot("03-shipping");
 
     // 等待卡字段 iframe
     log("等待并填写卡信息…");
     let found = false;
-    for (let i = 0; i < 30 && !found; i++) {
+    for (let i = 0; i < 40 && !found; i++) {
       found = page.frames().some((f) => FRAME.number(f.url() || "") || FRAME.number(f.name() || ""));
-      if (!found) await page.waitForTimeout(1000);
+      if (!found) await page.waitForTimeout(250);
     }
     if (!found) { result.outcome = "no_card_iframe"; await shot("04-no-iframe"); if (p.assist) return assistWait(browser, result, page, shot, log, p); return finish(browser, result); }
+    _perf("card-iframe-found");
 
     await dismissOverlays(page); // 关闭 Shop "Confirm it's you" 等遮挡卡字段的弹窗
+    _perf("overlays-dismissed");
 
     // 填卡（可重复调用）：每字段先读现值，缺失/被清空才重填，blur 触发校验格式化。返回 number/expiry/cvc 是否都已就位
     const fillCard = async () => {
@@ -233,7 +287,8 @@ export async function fillCheckout(p) {
     };
 
     await fillCard();
-    await page.waitForTimeout(1500); // 若 payment 区仍在重渲染，给它落定时间
+    _perf("card-filled");
+    await page.waitForTimeout(500); // 短暂落定；提交前 fillCard() 会再复检重填
     await shot("05-card-filled");
 
     // assist 兜底：填完能填的（含卡号，脚本内存填入）→ 保持窗口让用户补齐并手动点付款
@@ -264,11 +319,15 @@ export async function fillCheckout(p) {
     } catch {
       await pay.click({ timeout: 15000, force: true }); // 装饰性覆盖层拦截时强制点
     }
-    await page.waitForTimeout(6000);
-    await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+    // 提交后轮询结果（不用 networkidle，Shopify 埋点长连接会吃满超时）：
+    // 每 800ms 探测一次，命中 success/declined/challenge 即停，最多 ~12s。
+    let outcome = "pending";
+    for (let i = 0; i < 15; i++) {
+      await page.waitForTimeout(800);
+      outcome = await detect(page, result);
+      if (outcome !== "pending") break;
+    }
     await shot("06-after-pay");
-
-    let outcome = await detect(page, result);
 
     // 3DS/验证码降级：等待用户把验证码写入 otpFile 后自动回填
     if ((outcome === "challenge_3ds" || outcome === "challenge_captcha") && waitOtpMs > 0) {
@@ -413,10 +472,10 @@ async function detect(page, result) {
   const fr = page.frames();
   if (fr.some((f) => /3ds|acs|challenge|secure|authorize/i.test(f.url() || ""))) return "challenge_3ds";
   if (fr.some((f) => /recaptcha|hcaptcha|turnstile/i.test(f.url() || ""))) return "challenge_captcha";
-  const err = await page.getByText(/declined|incorrect|被拒|not be processed|支付失败|card was declined/i).first().textContent().catch(() => null);
+  const err = await textOf(page.getByText(/declined|incorrect|被拒|not be processed|支付失败|card was declined/i));
   if (err) { result.signals.formError = err.trim().slice(0, 200); return "declined"; }
   // 地址校验红框（State/国家/邮编未选或无效）→ 可恢复的 address_incomplete，而非误判 pending
-  const addrErr = await page.getByText(/select a (state|province|country)|enter a valid|请选择.*(州|省|国家)|请输入有效/i).first().textContent().catch(() => null);
+  const addrErr = await textOf(page.getByText(/select a (state|province|country)|enter a valid|请选择.*(州|省|国家)|请输入有效/i));
   if (addrErr) { result.signals.addressError = addrErr.trim().slice(0, 120); return "address_incomplete"; }
   return "pending";
 }
@@ -427,17 +486,18 @@ async function detect(page, result) {
 async function waitShippingReady(page) {
   const radios = page.locator('input[type="radio"][name*="delivery" i],input[type="radio"][name*="shipping" i]');
   let picked = false;
-  for (let i = 0; i < 20 && !picked; i++) {
+  for (let i = 0; i < 24 && !picked; i++) { // 快轮询 ~7.2s 上限；命中即退出
     if ((await radios.count().catch(() => 0)) > 0) {
       const first = radios.first();
       if (!(await first.isChecked().catch(() => false))) await first.check().catch(() => {});
       picked = true;
       break;
     }
-    await page.waitForTimeout(1000); // 骨架加载中或该单无配送方式（数字商品/免运费）
+    await page.waitForTimeout(300); // 骨架加载中或该单无配送方式（数字商品/免运费）
   }
-  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-  await page.waitForTimeout(1500); // 让 payment 区重挂载落定，避免随后填卡被清空
+  // 不用 networkidle（Shopify 埋点长连接几乎必然吃满超时）；短暂 settle 即可，
+  // 任何后续重挂载清空由“提交前复检重填 fillCard()”兜底。
+  await page.waitForTimeout(600);
   return picked;
 }
 
@@ -454,7 +514,7 @@ async function dismissOverlays(page) {
   for (const sel of closers) {
     try {
       const b = page.locator(sel).first();
-      if ((await b.count()) && (await b.isVisible())) await b.click({ timeout: 1500 });
+      if ((await b.count()) && (await b.isVisible())) await b.click({ timeout: 800 });
     } catch {
       /* ignore */
     }
@@ -464,13 +524,13 @@ async function dismissOverlays(page) {
     if (/shop|pay/i.test((f.url() || "") + (f.name() || ""))) {
       try {
         const b = f.locator('button[aria-label*="close" i], button:has-text("×"), button:has-text("✕")').first();
-        if (await b.count()) await b.click({ timeout: 1200 });
+        if (await b.count()) await b.click({ timeout: 800 });
       } catch {
         /* ignore */
       }
     }
   }
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(300);
 }
 
 export async function extractOrder(page) {
@@ -478,7 +538,7 @@ export async function extractOrder(page) {
   const m = url.match(/\/orders\/([^/?#]+)/) || url.match(/order[_-]?(?:number|id)=([^&]+)/i);
   let number = null;
   // 只认明确的订单号格式：Confirmation/Order/订单 后带 # + 字母数字码（如 X0FCMYJAT / 1023）
-  const t = await page.getByText(/(confirmation|order|订单)\s*#\s*[A-Z0-9]{3,}/i).first().textContent().catch(() => null);
+  const t = await textOf(page.getByText(/(confirmation|order|订单)\s*#\s*[A-Z0-9]{3,}/i));
   if (t) { const mm = t.match(/#\s*([A-Z0-9]{3,})/i); if (mm) number = mm[1]; }
   // 感谢页订单汇总（尽力而为，跨商户可能拿不到）：商品行 + 合计
   const items = await page
@@ -493,12 +553,9 @@ export async function extractOrder(page) {
   // ⚠️ 不从感谢页正则抓金额（多币种/多个 Total 行/兄弟节点易抓错）。
   //    金额权威来源是 pay 的 --amount（= 购物车总额 = 卡实际扣款），由上层写入 receipt。
   // 配送方式（"Shipping method" 标题下一行）— 描述性文本，抓错也不影响金额准确性
-  const shippingMethod = await page
-    .getByText(/shipping method|配送方式|运送方式/i)
-    .locator("xpath=following::*[1]")
-    .first()
-    .textContent()
-    .catch(() => null);
+  const shippingMethod = await textOf(
+    page.getByText(/shipping method|配送方式|运送方式/i).locator("xpath=following::*[1]")
+  );
   let merchant = null;
   try { merchant = new URL(url).host.replace(/\.myshopify\.com$/, "") || null; } catch { /* ignore */ }
   return {
@@ -509,6 +566,29 @@ export async function extractOrder(page) {
     items: items.length ? items : null,
     shippingMethod: shippingMethod ? shippingMethod.replace(/\s+/g, " ").trim().slice(0, 80) : null,
   };
+}
+
+// 启动浏览器；若浏览器内核未下载（常见于纯发卡用户首次购物），懒加载自动下 chromium 后重试。
+// 进度输出走 stderr（fd 2），保持 stdout 的一行 JSON envelope 干净。
+async function launchWithAutoInstall(chromium, opts, log) {
+  try {
+    return await chromium.launch(opts);
+  } catch (e) {
+    const msg = String(e?.message || "");
+    if (!/Executable doesn't exist|playwright install|please run|download new browsers/i.test(msg)) throw e;
+    log("首次购物：正在下载浏览器内核 chromium（约 150MB，仅首次，后续复用）…");
+    const { execFileSync } = await import("node:child_process");
+    try {
+      execFileSync("npx", ["--yes", "playwright", "install", "chromium"], { stdio: ["ignore", 2, 2], timeout: 300000 });
+    } catch (ie) {
+      throw new FillError(
+        "BROWSER_INSTALL_FAILED",
+        "浏览器内核自动下载失败，请手动运行：npx playwright install chromium（" + String(ie.message).split("\n")[0] + "）"
+      );
+    }
+    log("浏览器内核就绪，继续付款…");
+    return await chromium.launch(opts);
+  }
 }
 
 async function finish(browser, result) {
