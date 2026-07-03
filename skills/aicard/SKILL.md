@@ -407,7 +407,10 @@ Ask what they want if unstated, then:
 ```bash
 aicard shop search --query "<natural language>" [--country US] [--max-price 50] [--limit 5]
 # single store only: add --shop <domain>
+# 要最便宜：加 --sort price（结果按价格升序，products[0] 即最便宜）
 ```
+
+> 💰 **想买最便宜**：`--sort price` 让结果按价格升序返回（`data.sortedBy:"price"`），取 `products[0]`。注意它排的是**本次返回结果内**的最便宜（Shopify 按相关性给的前 N 条），非全网绝对最低；想扩大候选池就加大 `--limit`（如 30）或配合 `--max-price`。
 
 **Present results as a markdown table** (renders cleanly in the client, good density):
 
@@ -509,11 +512,28 @@ Use `aicard shop cards` to list cached cards (masked last-4 only).
 | `no_card_iframe` | Not a payment page / redirected | Re-open from a fresh `cart` |
 | `address_incomplete` | 国家/州没选中或缺字段 | 看 `signals.reason`；补 `--region` 等后重试，或走 assist 兜底 |
 
-**成功回执 `envelope.data.receipt`**（浏览器路径 web 订单）——展示给用户时务必说清：
+**成功回执 `envelope.data.receipt`**（浏览器路径 web 订单）——**务必按下面模板完整展示,不要漏字段(尤其邮箱/金额明细)**：
+
+```
+✅ 订单确认
+- 商户确认号：{orderNumber}（{merchant}）
+- 商品：{items 每行}
+- 明细：商品 {subtotal} + 运费 {shippingFee} + 税 {tax} = {total}（卡实扣 {amountCharged}）
+- 支付：{payment.scheme} •••• {payment.last4}（{payment.note}）
+- 配送：{shippingMethod} → {shipTo.name}，{shipTo.address}
+- 邮箱：{shipTo.email}（订单/物流确认邮件发到这里）
+- 凭证图：{proofImage}
+```
+
+要点：
 - `orderNumber`（如 `X0FCMYJAT`）是**商户确认号**，不是 Shopify API Global ID，**不能用 `shop track`/`get_order` 查询**。
-- `orderUrl` **会话绑定、不可二次打开**（`orderUrlDurable:false`；实测新浏览器打开会被弹回首页要求登录）。二次查看订单请引导用户走 `receipt.reopenVia`：确认邮件的 *View your order* 链接 / *Download to track with Shop* / 本地凭证图。
+- **金额以 `amountCharged` 为准**——优先感谢页最终 `total`（含运费+税，`amountSource:"checkout_total"`）；抓不到才回退 `--amount`（仅商品价，`amountSource:"cli_amount_fallback"`，可能偏小，需提示用户以卡账单为准）。运费/税是收银台结算时才加的，**`--amount` 不等于实扣额**。
+- `shipTo.email` **必须展示**——这是订单/物流确认邮件的接收地址。
 - `proofImage` = 本地持久付款凭证图 `~/.aicard/receipts/receipt-<确认号>-<ts>.png`（感谢页截图，无完整卡面），**主动把该路径给用户留存**。
-- 金额以 `amountCharged`（= 卡实扣总额）为准，非页面抓取。
+- **二次查看订单**（原感谢页链接 `orderUrl` 会话绑定、不可重开——实测新浏览器打开会被弹回首页要求登录，`orderUrlDurable:false`）。引导用户走 `receipt.reopenVia`：
+  - 收货邮箱里商户确认邮件的 *View your order* 链接（持久可打开）
+  - 感谢页的 *Download to track with Shop*（需 Shop 账号）
+  - 本地 `proofImage` 凭证图（离线留档）
 
 **失败后先看 `envelope.suggestion`**（它区分两类失败，别无脑 assist）：
 - 「**配送限制**」——该商户不配送此国家（`signals.availableCountries` 列出实际支持的）→ **不要 assist**（弹窗也没用），换收货国家或换商户。

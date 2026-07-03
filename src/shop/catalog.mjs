@@ -35,7 +35,7 @@ export async function searchCatalog(p) {
   if (p.country) context.address_country = toIso(p.country);
   if (Object.keys(context).length) catalog.context = context;
 
-  catalog.pagination = { limit: p.limit || 10 };
+  catalog.pagination = { limit: p.limit || 30 };
   if (p.cursor) catalog.pagination.cursor = p.cursor;
 
   const res = await ucpCall(endpoint, "search_catalog", { catalog }, { profile: p.profile || CATALOG_PROFILE, retries: 2 });
@@ -45,6 +45,11 @@ export async function searchCatalog(p) {
     const before = out.products.length;
     out.products = out.products.filter((prod) => !isTestStore(prod.merchantDomain || prod.variants?.[0]?.merchantDomain));
     out.excludedTestCount = before - out.products.length;
+  }
+  // 价格排序（最便宜优先）：按 priceMin 升序，无价的排最后。默认保持 Shopify 相关性顺序。
+  if (p.sort === "price") {
+    out.products.sort((a, b) => (a.priceMin ?? Infinity) - (b.priceMin ?? Infinity));
+    out.sortedBy = "price";
   }
   return out;
 }

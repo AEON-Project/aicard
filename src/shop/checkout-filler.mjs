@@ -550,9 +550,20 @@ export async function extractOrder(page) {
         .slice(0, 10)
     )
     .catch(() => []);
-  // ⚠️ 不从感谢页正则抓金额（多币种/多个 Total 行/兄弟节点易抓错）。
-  //    金额权威来源是 pay 的 --amount（= 购物车总额 = 卡实际扣款），由上层写入 receipt。
-  // 配送方式（"Shipping method" 标题下一行）— 描述性文本，抓错也不影响金额准确性
+  // 感谢页金额明细（权威最终扣款额只在此处：--amount 只是商品价，运费/税是收银台结算才加的）。
+  // 稳健取值：按标签行首锚定 + 读该行整段文本 + 只认带货币符号的金额，尽量避免抓错。
+  const money = async (re) => {
+    const loc = page.getByText(re);
+    if (!(await loc.count().catch(() => 0))) return null;
+    const txt = await loc.last().evaluate((el) => el.parentElement?.textContent || el.textContent || "").catch(() => null);
+    const mm = txt && txt.match(/[£$€¥]\s?[\d,]+\.\d{2}/);
+    return mm ? mm[0].replace(/\s/g, "") : null;
+  };
+  const total = await money(/^\s*(total|order total|合计|总计)\s*$/i) || await money(/^\s*total\b/i);
+  const subtotal = await money(/^\s*(subtotal|小计)\b/i);
+  const shippingFee = await money(/^\s*(shipping|delivery|运费|配送)\b/i);
+  const tax = await money(/^\s*(estimated tax|taxes?|vat|税)\b/i);
+  // 配送方式（"Shipping method" 标题下一行）
   const shippingMethod = await textOf(
     page.getByText(/shipping method|配送方式|运送方式/i).locator("xpath=following::*[1]")
   );
@@ -564,6 +575,10 @@ export async function extractOrder(page) {
     number,
     merchant,
     items: items.length ? items : null,
+    subtotal: subtotal || null,
+    shippingFee: shippingFee || null,
+    tax: tax || null,
+    total: total || null,
     shippingMethod: shippingMethod ? shippingMethod.replace(/\s+/g, " ").trim().slice(0, 80) : null,
   };
 }

@@ -17,9 +17,10 @@ export async function search(opts) {
       country: opts.country,
       maxPriceMinor: opts.maxPrice ? Math.round(parseFloat(opts.maxPrice) * 100) : undefined,
       available: true,
-      limit: opts.limit ? Number(opts.limit) : 10,
+      limit: opts.limit ? Number(opts.limit) : 30,
       cursor: opts.cursor,
       excludeTest: !opts.includeTest,
+      sort: opts.sort,
     });
     let htmlPath = null;
     if (opts.html) {
@@ -33,6 +34,7 @@ export async function search(opts) {
       scope: r.scope,
       count: r.products.length,
       excludedTest: r.excludedTestCount || 0,
+      sortedBy: r.sortedBy || "relevance",
       hasNext: r.hasNext,
       cursor: r.cursor,
       htmlPath,
@@ -218,11 +220,23 @@ export async function pay(opts) {
             orderUrl: r.order?.url || null,
             orderUrlDurable: false, // ⚠️ 实测：感谢页 URL 会话绑定，新浏览器打开会被弹回首页要求登录，不可二次打开
             purchasedAt: new Date().toISOString(),
-            amountCharged: amount, // 权威：= --amount = 购物车总额 = 卡实际扣款（非页面抓取）
+            // 卡实扣总额：优先感谢页最终 total（含运费/税，权威）；抓不到才回退 --amount（仅商品价，可能偏小）。
+            amountCharged: r.order?.total || `$${amount}`,
+            amountSource: r.order?.total ? "checkout_total" : "cli_amount_fallback",
             currency: "USD",
+            subtotal: r.order?.subtotal || null,
+            shippingFee: r.order?.shippingFee || null,
+            tax: r.order?.tax || null,
+            total: r.order?.total || null,
             items: r.order?.items || null,
             shippingMethod: r.order?.shippingMethod || null,
-            payment: { scheme: card.scheme, last4: String(card.number).slice(-4), source: cardSource },
+            payment: {
+              scheme: card.scheme,
+              last4: String(card.number).slice(-4),
+              source: cardSource,
+              // 人类可读文案直接进数据，避免渲染时丢失
+              note: cardSource === "cache" ? "复用缓存卡，未开新卡、未动钱包" : "新开虚拟卡（从钱包扣 USDT）",
+            },
             shipTo: { name: `${opts.first} ${opts.last}`.trim(), email: opts.email, phone: opts.phone, address: shipAddr },
             billingSameAsShipping: true,
             proofImage: r.order?.receiptImage || null, // 本地付款凭证图（感谢页截图），持久留档/售后用
