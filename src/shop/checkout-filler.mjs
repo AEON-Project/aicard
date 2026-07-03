@@ -270,7 +270,21 @@ export async function fillCheckout(p) {
       found = page.frames().some((f) => FRAME.number(f.url() || "") || FRAME.number(f.name() || ""));
       if (!found) await page.waitForTimeout(250);
     }
-    if (!found) { result.outcome = "no_card_iframe"; await shot("04-no-iframe"); if (p.assist) return assistWait(browser, result, page, shot, log, p); return finish(browser, result); }
+    if (!found) {
+      // 区分“商户不支持信用卡（仅 PayPal/钱包）” vs “真不是付款页”——避免误诊成配送/网络问题。
+      const hasCardOption = (await page.getByText(/credit card|debit card|信用卡|银行卡|card number|卡号/i).count().catch(() => 0)) > 0;
+      const hasWalletOnly = (await page.getByText(/paypal|apple pay|google pay|afterpay|shop pay/i).count().catch(() => 0)) > 0;
+      if (!hasCardOption && hasWalletOnly) {
+        result.outcome = "card_not_supported";
+        result.signals.reason = "该商户不支持信用卡/借记卡付款（仅 PayPal 等钱包），虚拟卡无法使用。请换一家支持信用卡的商户。";
+        await shot("04-no-card-option");
+        return finish(browser, result); // 换商户才有用，assist 也补不出卡选项
+      }
+      result.outcome = "no_card_iframe";
+      await shot("04-no-iframe");
+      if (p.assist) return assistWait(browser, result, page, shot, log, p);
+      return finish(browser, result);
+    }
     _perf("card-iframe-found");
 
     await dismissOverlays(page); // 关闭 Shop "Confirm it's you" 等遮挡卡字段的弹窗

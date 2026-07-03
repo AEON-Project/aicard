@@ -46,12 +46,41 @@ export async function searchCatalog(p) {
     out.products = out.products.filter((prod) => !isTestStore(prod.merchantDomain || prod.variants?.[0]?.merchantDomain));
     out.excludedTestCount = before - out.products.length;
   }
+  // 源头过滤：只保留“收信用卡（dev.shopify.card）”的商户——虚拟卡只能用于收卡商户。
+  // 全局 search 不带 payment_handlers，故对候选商户逐个做轻量单店查询确认。查不到不误杀（交 cart/浏览器兜底）。
+  if (p.requireCard) {
+    const domains = [...new Set(out.products.map((pr) => pr.merchantDomain).filter(Boolean))];
+    const pairs = await Promise.all(domains.map((d) => merchantAcceptsCard(d, p.profile).then((ok) => [d, ok])));
+    const cardMap = Object.fromEntries(pairs);
+    const before = out.products.length;
+    out.products = out.products.filter((pr) => cardMap[pr.merchantDomain] !== false);
+    out.excludedNoCard = before - out.products.length;
+  }
   // 价格排序（最便宜优先）：按 priceMin 升序，无价的排最后。默认保持 Shopify 相关性顺序。
   if (p.sort === "price") {
     out.products.sort((a, b) => (a.priceMin ?? Infinity) - (b.priceMin ?? Infinity));
     out.sortedBy = "price";
   }
   return out;
+}
+
+/** 商户是否收信用卡：轻量单店 search_catalog 取 ucp.payment_handlers 判断 dev.shopify.card。
+ *  查不到/出错 → 返回 true（不误杀，交 cart/浏览器兜底）。 */
+export async function merchantAcceptsCard(shopDomain, profile) {
+  if (!shopDomain) return true;
+  try {
+    const res = await ucpCall(
+      shopEndpoint(shopDomain),
+      "search_catalog",
+      { catalog: { query: "a", pagination: { limit: 1 } } },
+      { profile: profile || CATALOG_PROFILE, retries: 1, timeoutMs: 12000 }
+    );
+    const ph = res.ucp?.payment_handlers;
+    if (!ph || typeof ph !== "object") return true; // 拿不到 handlers 就不误杀
+    return Object.keys(ph).includes("dev.shopify.card");
+  } catch {
+    return true;
+  }
 }
 
 /**

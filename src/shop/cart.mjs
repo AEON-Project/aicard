@@ -41,6 +41,11 @@ export async function getCart(p) {
 
 function normalizeCart(res) {
   const c = res.cart || res;
+  // 支付方式支持：ucp.payment_handlers 含 dev.shopify.card = 收信用卡（虚拟卡可用）。
+  // Google Pay/Shop Pay/PayPal 是钱包，填不了原始卡号。
+  const ph = (res.ucp || c.ucp)?.payment_handlers || {};
+  const paymentMethods = Object.keys(ph);
+  const acceptsCard = paymentMethods.includes("dev.shopify.card");
   // UCP totals 是数组：[{ type:"subtotal"|"total"|"tax"|"shipping", amount, display_text }]
   // 金额为最小货币单位（如美分）→ 转主单位，便于 pay --amount 直接使用
   const toMajor = (v) => (v == null ? null : Math.round(Number(v)) / 100);
@@ -65,6 +70,8 @@ function normalizeCart(res) {
       lineTotal: pick(li.totals, "total"),
     })),
     expiresAt: c.expires_at || null,
+    paymentMethods,
+    acceptsCard,
     raw: c,
   };
 }

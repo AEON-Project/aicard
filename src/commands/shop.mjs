@@ -20,6 +20,7 @@ export async function search(opts) {
       limit: opts.limit ? Number(opts.limit) : 30,
       cursor: opts.cursor,
       excludeTest: !opts.includeTest,
+      requireCard: !opts.includeNoCard, // 源头只留收信用卡的商户（虚拟卡只能用于收卡店）
       sort: opts.sort,
     });
     let htmlPath = null;
@@ -34,6 +35,7 @@ export async function search(opts) {
       scope: r.scope,
       count: r.products.length,
       excludedTest: r.excludedTestCount || 0,
+      excludedNoCard: r.excludedNoCard || 0, // 因不收信用卡被过滤掉的数量
       sortedBy: r.sortedBy || "relevance",
       hasNext: r.hasNext,
       cursor: r.cursor,
@@ -98,7 +100,10 @@ export async function cart(opts) {
       continueUrl: c.continueUrl,
       backendHost,
       testBackend, // true = 收银台后端是测试店（如 twinoakstest），下单非真实交易
+      acceptsCard: c.acceptsCard, // false = 该商户不收信用卡（仅 PayPal 等钱包），虚拟卡无法付款
+      paymentMethods: c.paymentMethods,
       ...(testBackend ? { warning: `⚠️ 该商户收银台后端是测试店（${backendHost}），下单不是真实交易。shop pay 默认会拦截，如确需测试加 --allow-test。` } : {}),
+      ...(c.acceptsCard === false ? { warning: "⚠️ 该商户不收信用卡（仅 " + (c.paymentMethods || []).join("/") + "），虚拟卡无法付款，请换支持信用卡的商户。" } : {}),
       lineItems: c.lineItems,
       expiresAt: c.expiresAt,
     });
@@ -245,6 +250,9 @@ export async function pay(opts) {
         `（收货邮箱确认邮件 / 本地 ~/.aicard/receipts 凭证图 / 商户订单页），再由你决定后续。`;
     } else if (r.outcome === "declined") {
       suggestion = "卡被拒（未扣款）。脚本不自动重试；如需换卡/改信息，由你重新发起。";
+    } else if (r.outcome === "card_not_supported") {
+      // 未点付款、未扣款：商户只收 PayPal/钱包，不收信用卡，虚拟卡用不了 → 只能换商户
+      suggestion = "该商户不支持信用卡/借记卡（仅 PayPal 等钱包），虚拟卡无法使用（未扣款）。请换一家支持信用卡付款的商户。assist 也补不出卡选项。";
     } else if (r.outcome === "shipping_not_ready") {
       suggestion = "配送方式始终未加载（已尽量等待；未扣款、未下单）。脚本不自动重试；是否稍后重新发起由你决定。";
     } else if (r.outcome === "checkout_unavailable") {
