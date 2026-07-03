@@ -196,6 +196,7 @@ shop
   .option("--service-url <url>", "Override card service URL")
   .option("--private-key <key>", "Override EVM private key")
   .option("--headful", "Show the browser (needed for manual 3DS/OTP)", false)
+  .option("--assist", "兜底：脚本失败时弹可见窗口，填好已知信息后让用户手动完成并提交", false)
   .option("--fill-only", "Fill card but do NOT submit (test only, no charge)", false)
   .option("--wait-otp <ms>", "On 3DS/captcha, wait for OTP relay file up to N ms")
   .option("--otp-file <path>", "OTP relay file path (default ./otp.txt)")

@@ -71,7 +71,7 @@ export async function fillCheckout(p) {
   const result = { outcome: null, signals: {}, artifacts: [], order: null };
 
   const browser = await chromium.launch({
-    headless: !p.headful,
+    headless: !(p.headful || p.assist), // assist 兜底模式强制可见窗口，让用户手动完成
     args: ["--disable-blink-features=AutomationControlled"],
   });
   const ctx = await browser.newContext({
@@ -114,14 +114,10 @@ export async function fillCheckout(p) {
         try {
           await country.waitFor({ state: "visible", timeout: 6000 });
           await page.waitForTimeout(500);
-          const code = COUNTRY_CODES[A.country.toLowerCase()];
-          await country.selectOption({ label: A.country }).catch(async () => {
-            if (code) await country.selectOption({ value: code }).catch(() => country.selectOption(A.country).catch(() => {}));
-            else await country.selectOption(A.country).catch(() => {});
-          });
+          result.signals.countrySelected = await selectOptionSmart(country, A.country, COUNTRY_CODES[A.country.toLowerCase()]);
           await page.waitForTimeout(800); // 国家切换后地址/电话字段会重渲染
         } catch {
-          /* 国家选择失败不阻断 */
+          result.signals.countrySelected = false;
         }
       }
     }
@@ -140,15 +136,35 @@ export async function fillCheckout(p) {
         try {
           await st.waitFor({ state: "visible", timeout: 5000 });
           await page.waitForTimeout(500); // 等 options 异步加载
-          await st.selectOption({ label: A.region }).catch(async () => {
-            await st.selectOption({ value: A.region }).catch(() => st.selectOption(A.region).catch(() => {}));
-          });
+          result.signals.regionSelected = await selectOptionSmart(st, A.region, null);
         } catch {
-          /* 州选择失败不阻断 */
+          result.signals.regionSelected = false;
         }
       }
     }
     await shot("02-address");
+
+    // 地址校验错误检测（国家/州未选中等）→ 明确报错，不带着错误往下跑到迷惑的 fill_failed
+    const addrErr = await page.getByText(/select a country|select a state|select a province|enter a valid|请选择|请输入有效/i).first().textContent().catch(() => null);
+    if (addrErr) result.signals.addressError = addrErr.trim().slice(0, 120);
+    if (A.country && result.signals.countrySelected === false) {
+      result.outcome = "address_incomplete";
+      result.signals.reason = `国家未能选中：'${A.country}'（收银台无匹配选项，可能名称不同，如 Hong Kong SAR）`;
+      await shot("02b-address-error");
+      if (!p.assist) return finish(browser, result);
+    }
+    if (A.region && result.signals.regionSelected === false) {
+      result.outcome = "address_incomplete";
+      result.signals.reason = `州/省未能选中：'${A.region}'（请核对 --region 取值是否与该国家的省/州名一致）`;
+      await shot("02b-address-error");
+      if (!p.assist) return finish(browser, result);
+    }
+    if (result.signals.addressError && /state|province|州|省/i.test(result.signals.addressError) && !A.region) {
+      result.outcome = "address_incomplete";
+      result.signals.reason = "该收银台要求 state/province，但未提供 --region，请补充。";
+      await shot("02b-address-error");
+      if (!p.assist) return finish(browser, result);
+    }
 
     // 多步 checkout：逐个点“继续”把支付区带出来
     for (const label of ["Continue to shipping", "继续", "Continue to payment", "Continue"]) {
@@ -166,7 +182,7 @@ export async function fillCheckout(p) {
       found = page.frames().some((f) => FRAME.number(f.url() || "") || FRAME.number(f.name() || ""));
       if (!found) await page.waitForTimeout(1000);
     }
-    if (!found) { result.outcome = "no_card_iframe"; await shot("04-no-iframe"); return finish(browser, result); }
+    if (!found) { result.outcome = "no_card_iframe"; await shot("04-no-iframe"); if (p.assist) return assistWait(browser, result, page, shot, log, p); return finish(browser, result); }
 
     await dismissOverlays(page); // 关闭 Shop "Confirm it's you" 等遮挡卡字段的弹窗
 
@@ -186,6 +202,9 @@ export async function fillCheckout(p) {
       }
     }
     await shot("05-card-filled");
+
+    // assist 兜底：填完能填的（含卡号，脚本内存填入）→ 保持窗口让用户补齐并手动点付款
+    if (p.assist) return assistWait(browser, result, page, shot, log, p);
 
     if (!["number", "expiry", "cvc"].every((k) => result.signals[`card_${k}`]?.filled)) {
       result.outcome = "fill_failed";
@@ -248,6 +267,62 @@ export async function fillCheckout(p) {
     await shot("99-error").catch(() => {});
     return finish(browser, result);
   }
+}
+
+/** 选中下拉：ISO code(value，语言无关) → label 精确 → 动态遍历 options 模糊匹配
+ *  解决 "Hong Kong" vs "Hong Kong SAR"、本地化 label、简称/全称差异 */
+async function selectOptionSmart(sel, name, code) {
+  const trySel = async (arg) => {
+    try { await sel.selectOption(arg); return true; } catch { return false; }
+  };
+  if (code && (await trySel({ value: code }))) return true;
+  if (await trySel({ label: name })) return true;
+  if (await trySel(name)) return true;
+  try {
+    const lname = String(name).toLowerCase().trim();
+    const options = await sel.locator("option").all();
+    for (const o of options) {
+      const v = ((await o.getAttribute("value")) || "").trim();
+      const t = ((await o.textContent()) || "").trim().toLowerCase();
+      if (!v) continue;
+      if ((code && v.toUpperCase() === code) || t === lname || t.includes(lname) || (lname.length > 3 && t.length > 2 && lname.includes(t))) {
+        if (await trySel(v)) return true;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/** assist 兜底：脚本没全自动搞定时，保持可见窗口 + 已填好的信息，等用户手动完成并点付款 */
+async function assistWait(browser, result, page, shot, log, p) {
+  result.signals.assist = true;
+  await shot("assist-ready");
+  log("⚠️ 脚本未能全自动完成。已弹出浏览器窗口并尽量填好地址/卡信息——请在窗口里补齐未完成的字段（国家/州/验证码等）并点【Pay / 付款】完成。（卡号能填的已由脚本填入，无需你手输）");
+  const deadline = Date.now() + (p.assistTimeoutMs || 600000); // 默认 10 分钟等用户操作
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(3000);
+    let oc = "pending";
+    try {
+      oc = await detect(page, result);
+    } catch {
+      break; // 页面/浏览器被用户关闭
+    }
+    if (oc === "success") {
+      result.outcome = "success";
+      result.order = await extractOrder(page);
+      await shot("assist-done");
+      return finish(browser, result);
+    }
+    if (oc === "declined") {
+      result.outcome = "declined";
+      await shot("assist-declined");
+      return finish(browser, result);
+    }
+  }
+  if (result.outcome !== "success") result.outcome = "assist_incomplete";
+  return finish(browser, result);
 }
 
 async function detect(page, result) {

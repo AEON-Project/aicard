@@ -21,7 +21,7 @@ description: >
 emoji: "💳"
 homepage: https://github.com/AEON-Project/aicard
 metadata:
-  version: "0.9.0"
+  version: "0.9.2"
   author: AEON-Project
   openclaw:
     requires:
@@ -475,16 +475,17 @@ Checkout needs the delivery address. Collect once:
 ⚠️ **Real charge**: issues a real virtual card from the user's wallet and submits a real order. Only run after explicit confirmation.
 
 ```bash
+# 无需任何浏览器/超时参数：代码默认 headless（后台不弹窗）、默认不阻塞
 aicard shop pay \
   --continue-url "<continueUrl>" --amount <total> \
   --email <email> --first <First> --last <Last> \
-  --address1 "<street>" --city "<City>" --zip <zip> --country "<Country label>" \
-  [--region "<State>"] [--phone <phone>] \
-  --headful --wait-otp 180000
+  --address1 "<street>" --city "<City>" --zip <zip> --country "<Country>" \
+  [--phone <phone>] [--region "<State>"]
 ```
 
-- `--headful --wait-otp <ms>` lets a 3DS/OTP challenge be completed with the user's code.
+- **默认就是对的**：代码默认 `headless`（后台运行、不弹浏览器窗口）+ 默认不阻塞（不传 `--wait-otp` 时，遇 3DS 直接返回 `outcome: challenge_3ds`，**不会挂起超时**）。不要画蛇添足加 `--headful`（弹窗等人）或前台 `--wait-otp`（阻塞超时）。
 - Envelope returns `cardSource` (`cache`|`new`), `outcome`, `cardLast4`, `order` — **never a full card number**.
+- **（进阶）3DS 自动回填**：仅当要在同一进程内等用户输验证码时，才 `run_in_background` 运行 + 加 `--wait-otp <ms> --otp-file <path>`，检测到挑战后向用户要码并 `echo "<code>" > <path>` 回填。否则默认按下方 `outcome` 分支处理即可。
 
 **Card selection is automatic (no wallet needed if a card exists)**:
 1. `pay` first reuses a **cached card** whose face value ≥ order total → skips the wallet entirely.
@@ -500,6 +501,15 @@ Use `aicard shop cards` to list cached cards (masked last-4 only).
 | `declined` | Card/info rejected | Show `signals.formError`; suggest retry |
 | `fill_failed` | Card fields not injectable (checkout changed) | Report; do not retry blindly |
 | `no_card_iframe` | Not a payment page / redirected | Re-open from a fresh `cart` |
+| `address_incomplete` | 国家/州没选中或缺字段 | 看 `signals.reason`；补 `--region` 等后重试，或走 assist 兜底 |
+
+**失败兜底（assist 模式）**：当 outcome 非 `success`/`challenge_*`（如 `fill_failed` / `address_incomplete` / `no_card_iframe`）时，用 assist 重跑——**弹出可见浏览器窗口**、脚本填好已知信息，让用户在窗口里补齐（国家/州/验证码等）并手动点【付款】：
+
+```bash
+aicard shop pay --assist --continue-url "..." --amount ... --email ... <其余收货参数同上>
+```
+- assist 保持窗口最多 10 分钟等用户操作；用户点付款抵达成功页即自动收尾（`outcome: success` + `order`）；超时/未完成返回 `assist_incomplete`。
+- 卡号由脚本在浏览器内存填入，**不进对话/LLM/终端**。
 
 ### 5.5 Track order (optional)
 

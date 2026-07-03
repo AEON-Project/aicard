@@ -16,6 +16,8 @@ npx skills add AEON-Project/aicard -a claude-code -a cursor -a codex -g -y
 
 Supported agents: Claude Code, Cursor, Codex, OpenClaw, Gemini CLI, GitHub Copilot, Windsurf, Roo Code, and [39+ more](https://agentskills.io).
 
+> ℹ️ 安装时若看到 `Failed to install 1: PromptScript`——这是 **PromptScript 平台不支持全局 skill 安装**的自身限制，属正常跳过，**不影响** Claude Code / Cursor / Codex 等主流工具。只想装指定工具时改用上面的 `-a` 形式即可。
+
 ## CLI Commands
 
 | Command | Description | Key Options |

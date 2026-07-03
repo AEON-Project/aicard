@@ -164,6 +164,7 @@ export async function pay(opts) {
       address,
       card,
       headful: !!opts.headful,
+      assist: !!opts.assist,
       noSubmit: !!opts.fillOnly,
       waitOtpMs: opts.waitOtp ? Number(opts.waitOtp) : 0,
       otpFile: opts.otpFile,

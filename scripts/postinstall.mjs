@@ -20,14 +20,22 @@ if (!existsSync(skillSrc)) {
   process.exit(0);
 }
 
-// 尝试用 skills CLI 安装到所有工具
+// 尝试用 skills CLI 安装到所有工具（捕获输出，过滤不支持全局安装的小众平台噪音）
 try {
-  execFileSync('npx', ['skills', 'add', skillSrc, '-g', '-y', '--copy'], {
-    stdio: 'inherit',
+  const out = execFileSync('npx', ['skills', 'add', skillSrc, '-g', '-y', '--copy'], {
+    encoding: 'utf8',
     timeout: 30000,
     cwd: join(__dirname, '..'),
   });
-  console.log('✔ aicard skill installed via skills CLI (all detected tools)');
+  // 个别平台（如 PromptScript）不支持全局 skill 安装，skills CLI 会报 "Failed to install 1"——
+  // 这是该平台自身限制、属正常跳过，不影响 Claude Code / Cursor / Codex 等主流工具，故不透传该噪音。
+  const installedOk = /Installed\s+\d+\s+skill|✓\s+~/.test(out || '');
+  if (installedOk) {
+    console.log('✔ aicard skill installed (Claude Code, Cursor, Codex, GitHub Copilot, 等主流工具)');
+  } else {
+    process.stdout.write(out || '');
+    console.log('✔ aicard skill installed via skills CLI');
+  }
   process.exit(0);
 } catch {
   // skills CLI 不可用或失败，fallback
