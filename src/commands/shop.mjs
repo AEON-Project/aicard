@@ -100,7 +100,15 @@ export async function pay(opts) {
   try {
     if (!opts.continueUrl) return emitErr("shop.pay", "NO_URL", { message: "缺少 --continue-url（来自 shop cart 的 continueUrl）" });
     const amount = opts.amount != null ? Number(opts.amount) : null;
-    if (!amount) return emitErr("shop.pay", "NO_AMOUNT", { message: "缺少 --amount（应等于购物车 total）" });
+    if (!amount || isNaN(amount) || amount <= 0) return emitErr("shop.pay", "NO_AMOUNT", { message: "缺少或非法 --amount（应等于购物车 total，正数）" });
+
+    // 收货信息严格校验 → 结构化错误（逻辑严谨，一次性列出所有缺失）
+    const shipping = { email: opts.email, first: opts.first, last: opts.last, address1: opts.address1, city: opts.city, zip: opts.zip, country: opts.country, phone: opts.phone };
+    const REQUIRED = ["email", "first", "last", "address1", "city", "zip", "country", "phone"];
+    const missing = REQUIRED.filter((k) => !shipping[k] || !String(shipping[k]).trim());
+    if (missing.length) return emitErr("shop.pay", "MISSING_SHIPPING_FIELDS", { message: `缺少收货信息：${missing.join("、")}`, missing });
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(shipping.email).trim()))
+      return emitErr("shop.pay", "INVALID_EMAIL", { message: "邮箱格式无效（必须是用户本人真实邮箱，用于收订单/物流）", field: "email" });
 
     const { findUsableCard, markCardUsed } = await import("../shop/cards.mjs");
     const { fillCheckout } = await import("../shop/checkout-filler.mjs");

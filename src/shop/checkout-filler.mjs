@@ -10,6 +10,7 @@
  */
 import { mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
+import { COUNTRY_CODES } from "./country-data.mjs";
 
 export class FillError extends Error {
   constructor(code, message) {
@@ -31,6 +32,8 @@ const INPUT = {
   cvc: 'input[name="verification_value"],input[autocomplete="cc-csc"]',
   name: 'input[name="name"],input[autocomplete="cc-name"]',
 };
+
+// COUNTRY_CODES 来自 country-data.mjs（从真实 Shopify 收银台抠取的 201 国权威数据，见顶部 import）
 
 /**
  * 填卡并提交。
@@ -104,11 +107,22 @@ export async function fillCheckout(p) {
     await page.waitForTimeout(3000);
     await shot("01-open");
 
-    // 国家（先选，电话/邮编校验依赖它）
+    // 国家（先选，电话/邮编校验依赖它）——等 options 加载 + label/ISO 代码多重匹配 + 切换后等字段重渲染
     if (A.country) {
-      const country = page.locator('select[autocomplete="country"],select[name*="countryCode" i]').first();
+      const country = page.locator('select[autocomplete="country"],select[name*="countryCode" i],select[name*="country" i]').first();
       if (await country.count()) {
-        await country.selectOption({ label: A.country }).catch(() => country.selectOption(A.country).catch(() => {}));
+        try {
+          await country.waitFor({ state: "visible", timeout: 6000 });
+          await page.waitForTimeout(500);
+          const code = COUNTRY_CODES[A.country.toLowerCase()];
+          await country.selectOption({ label: A.country }).catch(async () => {
+            if (code) await country.selectOption({ value: code }).catch(() => country.selectOption(A.country).catch(() => {}));
+            else await country.selectOption(A.country).catch(() => {});
+          });
+          await page.waitForTimeout(800); // 国家切换后地址/电话字段会重渲染
+        } catch {
+          /* 国家选择失败不阻断 */
+        }
       }
     }
     log("填写收货信息…");
