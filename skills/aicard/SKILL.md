@@ -21,7 +21,7 @@ description: >
 emoji: "💳"
 homepage: https://github.com/AEON-Project/aicard
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
   author: AEON-Project
   openclaw:
     requires:
