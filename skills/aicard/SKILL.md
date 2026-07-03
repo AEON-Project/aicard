@@ -513,16 +513,19 @@ aicard shop pay \
 
 Use `aicard shop cards` to list cached cards (masked last-4 only).
 
-> 🚫 **防重复扣款（最高优先级）**：只要 `signals.paySubmitted === true`（已点过 Pay），且结果**不是** `success` 也**不是** `declined`（即 `challenge_3ds`/`pending`/`error`）——**款项可能已成功扣除**。**绝对禁止**重新建车 / 重跑 `aicard shop pay`（会重复扣款）。先照 `envelope.suggestion` 核实是否已成交（收货邮箱确认邮件 / `~/.aicard/receipts` 凭证图 / 商户订单），确认第一笔未成交才可再动作。`declined` 与所有点付款**之前**的失败（`checkout_unavailable`/`fill_failed`/`no_card_iframe`/`address_incomplete`，`paySubmitted` 为假）才是未扣款、可安全重试。
+> 🚫 **防重复扣款铁律（最高优先级）**：**脚本/agent 绝不自动重试付款**。任何非 `success` 结果都**只报告状态 + 展示 `envelope.suggestion`**，是否再下单**完全由用户手动决定**。
+> - 尤其 `signals.paySubmitted === true`（已点过 Pay）且结果非 `success`/`declined`（`challenge_3ds`/`pending`/`error`）：**款可能已扣**，绝不重跑 `shop pay`。先核实是否成交（收货邮箱确认邮件 / `~/.aicard/receipts` 凭证图 / 商户订单）。
+> - 3DS 的正确完成方式是**同一次 `--wait-otp` 会话内回填验证码**，绝不另起新付款。
+> - 即便是"未扣款"的付款前失败（`shipping_not_ready`/`checkout_unavailable`/`fill_failed`/`no_card_iframe`/`address_incomplete`，`paySubmitted:false`），也**不要自动重跑**——报告后由用户决定是否再来一单。
 
-| `outcome` | Meaning | Next |
+| `outcome` | Meaning | Next（一律不自动重试，报告+等用户决定） |
 | --- | --- | --- |
 | `success` | Paid, order placed | 展示 `receipt`（见下）；给出本地凭证图路径 `receipt.proofImage` |
-| `challenge_3ds` / `challenge_captcha` | 已点付款、需用户验证码（`paySubmitted:true`） | **同一次**后台 `--wait-otp` 内完成：脚本自动发码 → 向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 回填。**不要另起新付款**（会重复扣款）。注：大多数 3DS 是 frictionless，脚本已等它自动通过；能走到这里多是真需要码 |
-| `declined` | 卡被拒（**未扣款**） | Show `signals.formError`；核对/换卡后可安全重试 |
-| `fill_failed` | Card fields not injectable (checkout changed) | Report; do not retry blindly |
-| `no_card_iframe` | Not a payment page / redirected | Re-open from a fresh `cart` |
-| `address_incomplete` | 国家/州没选中或缺字段 | 看 `signals.reason`；补 `--region` 等后重试，或走 assist 兜底 |
+| `challenge_3ds` / `challenge_captcha` | 已点付款、需用户验证码（`paySubmitted:true`） | **同一次**后台 `--wait-otp` 内完成：脚本自动发码 → 向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 回填。**绝不另起新付款**。注：多数 3DS 是 frictionless（脚本已等它自动通过），走到这里多是真需要码 |
+| `declined` | 卡被拒（**未扣款**） | 展示 `signals.formError`；报告后由用户决定是否换卡再发起 |
+| `shipping_not_ready` | 配送方式始终未加载（**未扣款、未下单**） | 报告；是否稍后重发由用户决定 |
+| `fill_failed` / `no_card_iframe` | 填单未完成、未提交（**未扣款**） | 报告；由用户决定用 `--assist` 手动完成或重发 |
+| `address_incomplete` | 国家/州没选中或缺字段（**未扣款**） | 看 `signals.reason`；报告后由用户补 `--region` 等再手动发起 |
 
 **成功回执 `envelope.data.receipt`**（浏览器路径 web 订单）——**务必按下面模板完整展示,不要漏字段(尤其邮箱/金额明细)**：
 

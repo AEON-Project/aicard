@@ -240,7 +240,8 @@ export async function fillCheckout(p) {
       if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(1500); }
     }
     // 等配送方式真正加载完（骨架→真实单选项）再填卡：Shopify 在配送方式解析完成后会重渲染 payment 区，过早填卡会被清空
-    await waitShippingReady(page);
+    const ship = await waitShippingReady(page);
+    result.signals.shippingReady = ship.picked;
     _perf("shipping-ready");
     await shot("03-shipping");
 
@@ -301,6 +302,15 @@ export async function fillCheckout(p) {
 
     if (p.noSubmit) { result.outcome = "filled_no_submit"; return finish(browser, result); }
 
+    // ⚠️ 运费方式必需但未加载出来 → 点 Pay 会卡在 "Processing…"（实测本次）。
+    //    在点付款【之前】中止：未提交、未扣款、可安全重试。避免“已提交但状态未知”的模糊态。
+    if (ship.required && !ship.picked) {
+      result.outcome = "shipping_not_ready";
+      result.signals.reason = "配送方式未加载出来（收银台运费率未就绪，点付款会卡住）。未提交付款、未扣款——请重试（用 `shop cart` 重新生成 continueUrl 后再 pay）。";
+      await shot("05c-shipping-not-ready");
+      return finish(browser, result);
+    }
+
     // 提交（真实扣款）
     log("提交付款…");
     // 选“立即付款”按钮：优先 Shopify 固定 id；否则按无障碍名匹配。
@@ -324,17 +334,20 @@ export async function fillCheckout(p) {
     // 每 1s 探测一次。success/declined 立即停；challenge_3ds 不立即停——
     // 大多数 3DS 是 frictionless（无感）：ACS iframe 出现但会自动通过变 success。
     // 给它最多 ~10s 自动完成；只有持续是挑战才当作“真需要用户输验证码”。
+    // 轮询上限放大到 ~90s：付款 "Processing…"（含 frictionless 3DS + 建单）在慢网络下可能 >20s，
+    // 过早返回 pending 会造成“款可能已扣但状态未知”的危险模糊态。success/declined/真挑战都提前退出，
+    // 只有真正慢/卡的情况才等满。
     let outcome = "pending";
     let challengeStreak = 0;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 90; i++) {
       await page.waitForTimeout(1000);
       outcome = await detect(page, result);
       if (outcome === "success" || outcome === "declined" || outcome === "address_incomplete") break;
       if (outcome === "challenge_3ds" || outcome === "challenge_captcha") {
-        if (++challengeStreak >= 10) break; // 持续 ~10s 仍是挑战 → 真挑战（需用户交互）
+        if (++challengeStreak >= 12) break; // 持续 ~12s 仍是挑战 → 真挑战（需用户交互）
         continue; // frictionless：再给几秒自动通过
       }
-      challengeStreak = 0; // pending：重置
+      challengeStreak = 0; // pending（处理中）：重置，继续等到终态
     }
     await shot("06-after-pay");
 
@@ -499,9 +512,12 @@ async function detect(page, result) {
 // 等配送方式区就绪：骨架占位消失、出现真实单选项后选中第一项，再等 payment 区重渲染落定。
 // 关键：Shopify 在配送方式解析完成后会重挂载卡 iframe，过早填卡会被清空（corkcicle 尤甚）。
 async function waitShippingReady(page) {
+  // 运费方式是下单必需项。这里等它真正加载出可选项并选中；返回 {picked, required}。
+  // required=是否存在“Shipping method”区（存在却没选上 = 未就绪，点 Pay 会卡在 Processing）。
   const radios = page.locator('input[type="radio"][name*="delivery" i],input[type="radio"][name*="shipping" i]');
+  const heading = page.getByText(/shipping method|delivery method|配送方式|运送方式|shipping options/i);
   let picked = false;
-  for (let i = 0; i < 24 && !picked; i++) { // 快轮询 ~7.2s 上限；命中即退出
+  for (let i = 0; i < 150 && !picked; i++) { // 最多 ~45s 等运费率加载（配送必需，尽量等它出来）；命中即退出
     if ((await radios.count().catch(() => 0)) > 0) {
       const first = radios.first();
       if (!(await first.isChecked().catch(() => false))) await first.check().catch(() => {});
@@ -510,10 +526,9 @@ async function waitShippingReady(page) {
     }
     await page.waitForTimeout(300); // 骨架加载中或该单无配送方式（数字商品/免运费）
   }
-  // 不用 networkidle（Shopify 埋点长连接几乎必然吃满超时）；短暂 settle 即可，
-  // 任何后续重挂载清空由“提交前复检重填 fillCard()”兜底。
-  await page.waitForTimeout(600);
-  return picked;
+  const required = (await heading.count().catch(() => 0)) > 0; // 有运费区标题=本单需要运费方式
+  await page.waitForTimeout(500); // 短暂 settle；卡字段被清空由“提交前复检重填”兜底
+  return { picked, required };
 }
 
 async function dismissOverlays(page) {

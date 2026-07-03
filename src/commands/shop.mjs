@@ -218,29 +218,27 @@ export async function pay(opts) {
       Array.isArray(avail) &&
       avail.length > 0 &&
       !avail.some((c) => c.toLowerCase().includes(cc) || cc.includes(c.toLowerCase()));
-    // ⚠️ 防重复扣款优先：已点过付款(paySubmitted) 且结果非 success/declined → 款可能已扣，严禁重建购物车重跑。
+    // 🚫 铁律：脚本【绝不自动重试付款】。任何非成功结果只报告状态，是否再下单完全由用户决定。
+    //    这是防重复扣款的根本保证（尤其点过 Pay 后结果不明时，重跑=重复扣款）。
     const paid = !!r.signals?.paySubmitted;
     if (r.outcome === "success") {
       // 成功，无需建议
     } else if (paid && r.outcome !== "declined") {
-      // challenge_3ds / challenge_captcha / pending / error（点过付款、结果未确认）
+      // 点过 Pay、结果未确认（challenge_3ds / pending / error）——款可能已扣
       suggestion =
         `⚠️ 已提交付款但结果未确认（${r.outcome}）——款项【可能已成功扣除】。` +
-        `【严禁重新建车 / 重跑 shop pay，会重复扣款】。正确处理：` +
-        `① 若是 3DS 验证码，用【同一次】后台 --wait-otp 流程回填验证码完成（不要另起新付款）；` +
-        `② 先核实是否已成交（收货邮箱的商户确认邮件 / 本地 ~/.aicard/receipts 凭证图 / 商户订单页）；` +
-        `③ 确认第一笔确实未成交后，才可重试。`;
+        `脚本不会自动重试。请勿重跑 shop pay（会重复扣款）。请核实是否已成交` +
+        `（收货邮箱的商户确认邮件 / 本地 ~/.aicard/receipts 凭证图 / 商户订单页），再由你决定后续。`;
     } else if (r.outcome === "declined") {
-      // 卡被拒 = 未扣款，安全
-      suggestion = "卡被拒（未扣款）：核对卡/收货信息或换卡后可重试。";
+      suggestion = "卡被拒（未扣款）。脚本不自动重试；如需换卡/改信息，由你重新发起。";
+    } else if (r.outcome === "shipping_not_ready") {
+      suggestion = "配送方式始终未加载（已尽量等待；未扣款、未下单）。脚本不自动重试；是否稍后重新发起由你决定。";
     } else if (r.outcome === "checkout_unavailable") {
-      // 未点付款、未扣款：收银台链接失效/过期，安全重建
-      suggestion = "收银台链接已失效或过期（未扣款）。用 `shop cart` 重新生成 continueUrl 后再 `shop pay`。";
+      suggestion = "收银台链接失效/过期（未扣款）。脚本不自动重试；如需继续，由你重新生成 continueUrl 后发起。";
     } else if (shipUnsupported) {
       suggestion = `该商户仅配送：${avail.slice(0, 6).join(", ")}${avail.length > 6 ? " …" : ""} —— 收货国家不在其中（未扣款）。请换收货国家或换商户。`;
     } else if (["fill_failed", "no_card_iframe", "address_incomplete"].includes(r.outcome)) {
-      // 均在点付款之前失败、未扣款：可安全 assist 重跑
-      suggestion = "可恢复（未扣款）：用 --assist 重跑（弹可见窗口，脚本填好已知信息，用户手动补齐 State 等并点付款）。";
+      suggestion = "填单未完成、未提交付款（未扣款）。脚本不自动重试；可由你用 --assist 手动完成本单，或重新发起。";
     }
 
     // 支付成功 → 组装结构化收据（收货/金额来自入参，卡末4/结果来自结果，确认号/明细/凭证图来自感谢页）
