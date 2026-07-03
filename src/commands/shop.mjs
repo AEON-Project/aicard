@@ -218,15 +218,29 @@ export async function pay(opts) {
       Array.isArray(avail) &&
       avail.length > 0 &&
       !avail.some((c) => c.toLowerCase().includes(cc) || cc.includes(c.toLowerCase()));
-    if (r.outcome === "checkout_unavailable") {
-      // 不可恢复：收银台链接失效/过期，assist 也没用，必须重新建车
-      suggestion = "收银台链接已失效或过期。请用 `shop cart` 重新生成 continueUrl 后再 `shop pay`（assist 也无法救活死链）。";
+    // ⚠️ 防重复扣款优先：已点过付款(paySubmitted) 且结果非 success/declined → 款可能已扣，严禁重建购物车重跑。
+    const paid = !!r.signals?.paySubmitted;
+    if (r.outcome === "success") {
+      // 成功，无需建议
+    } else if (paid && r.outcome !== "declined") {
+      // challenge_3ds / challenge_captcha / pending / error（点过付款、结果未确认）
+      suggestion =
+        `⚠️ 已提交付款但结果未确认（${r.outcome}）——款项【可能已成功扣除】。` +
+        `【严禁重新建车 / 重跑 shop pay，会重复扣款】。正确处理：` +
+        `① 若是 3DS 验证码，用【同一次】后台 --wait-otp 流程回填验证码完成（不要另起新付款）；` +
+        `② 先核实是否已成交（收货邮箱的商户确认邮件 / 本地 ~/.aicard/receipts 凭证图 / 商户订单页）；` +
+        `③ 确认第一笔确实未成交后，才可重试。`;
+    } else if (r.outcome === "declined") {
+      // 卡被拒 = 未扣款，安全
+      suggestion = "卡被拒（未扣款）：核对卡/收货信息或换卡后可重试。";
+    } else if (r.outcome === "checkout_unavailable") {
+      // 未点付款、未扣款：收银台链接失效/过期，安全重建
+      suggestion = "收银台链接已失效或过期（未扣款）。用 `shop cart` 重新生成 continueUrl 后再 `shop pay`。";
     } else if (shipUnsupported) {
-      // 不可恢复：该商户不配送此国家，assist 也没用
-      suggestion = `该商户仅配送：${avail.slice(0, 6).join(", ")}${avail.length > 6 ? " …" : ""} —— 收货国家不在其中。请换收货国家或换商户（配送限制，assist 弹窗也无法解决）。`;
-    } else if (["fill_failed", "no_card_iframe", "challenge_3ds", "challenge_captcha", "address_incomplete"].includes(r.outcome)) {
-      // 可恢复：用 assist 弹窗让用户补齐（State/验证码等）
-      suggestion = "可恢复：用 --assist 重跑（弹出可见浏览器窗口，脚本填好已知信息，由用户手动补齐 State/验证码等并点付款）。";
+      suggestion = `该商户仅配送：${avail.slice(0, 6).join(", ")}${avail.length > 6 ? " …" : ""} —— 收货国家不在其中（未扣款）。请换收货国家或换商户。`;
+    } else if (["fill_failed", "no_card_iframe", "address_incomplete"].includes(r.outcome)) {
+      // 均在点付款之前失败、未扣款：可安全 assist 重跑
+      suggestion = "可恢复（未扣款）：用 --assist 重跑（弹可见窗口，脚本填好已知信息，用户手动补齐 State 等并点付款）。";
     }
 
     // 支付成功 → 组装结构化收据（收货/金额来自入参，卡末4/结果来自结果，确认号/明细/凭证图来自感谢页）

@@ -504,7 +504,7 @@ aicard shop pay \
   - 验证码去向：卡绑定的邮箱/手机（实测 UQPAY 发到卡注册邮箱）。
   - ⚠️ **查进度别用 `sleep N; tail/cat`**——会被运行环境（harness）拦截（"Do not chain shorter sleeps"）。用 `run_in_background` 起进程后**直接读它的输出文件**，或用 Monitor 监听关键行（`验证码`/`outcome`）；等验证码期间无需轮询，拿到码写文件即可。
 - **`--assist` 是兜底**：仅当会话式 OTP 走不通时（脚本没点出发码按钮、或回填后仍卡住）才用——弹可见窗口让用户手动走完 3DS。不要一上来就 `--assist`。
-- 不带 `--wait-otp` 前台跑：遇 3DS 立即返回 `challenge_3ds`（不挂起），适合"先探测再决定"；真要完成付款请按上面后台 `--wait-otp` 流程。
+- 🚫 **真实购买一律直接用后台 `--wait-otp` 跑，不要"先不带 --wait-otp 探测一次再跑"**：探测那次也会点 Pay，若命中 3DS，再另起一次 `--wait-otp` 就是**第二次点 Pay = 重复扣款风险**。一次到位:确认下单后就后台 `--wait-otp`，3DS 在同一 session 内回填完成。
 
 **Card selection is automatic (no wallet needed if a card exists)**:
 1. `pay` first reuses a **cached card** whose face value ≥ order total → skips the wallet entirely.
@@ -513,11 +513,13 @@ aicard shop pay \
 
 Use `aicard shop cards` to list cached cards (masked last-4 only).
 
+> 🚫 **防重复扣款（最高优先级）**：只要 `signals.paySubmitted === true`（已点过 Pay），且结果**不是** `success` 也**不是** `declined`（即 `challenge_3ds`/`pending`/`error`）——**款项可能已成功扣除**。**绝对禁止**重新建车 / 重跑 `aicard shop pay`（会重复扣款）。先照 `envelope.suggestion` 核实是否已成交（收货邮箱确认邮件 / `~/.aicard/receipts` 凭证图 / 商户订单），确认第一笔未成交才可再动作。`declined` 与所有点付款**之前**的失败（`checkout_unavailable`/`fill_failed`/`no_card_iframe`/`address_incomplete`，`paySubmitted` 为假）才是未扣款、可安全重试。
+
 | `outcome` | Meaning | Next |
 | --- | --- | --- |
 | `success` | Paid, order placed | 展示 `receipt`（见下）；给出本地凭证图路径 `receipt.proofImage` |
-| `challenge_3ds` / `challenge_captcha` | 需要用户验证码 | 用**后台 `--wait-otp` 运行**：脚本自动触发发码 → 向用户要验证码 → `echo "<code>" > /tmp/aicard-otp.txt` 自动回填。走不通再 `--assist` 兜底 |
-| `declined` | Card/info rejected | Show `signals.formError`; suggest retry |
+| `challenge_3ds` / `challenge_captcha` | 已点付款、需用户验证码（`paySubmitted:true`） | **同一次**后台 `--wait-otp` 内完成：脚本自动发码 → 向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 回填。**不要另起新付款**（会重复扣款）。注：大多数 3DS 是 frictionless，脚本已等它自动通过；能走到这里多是真需要码 |
+| `declined` | 卡被拒（**未扣款**） | Show `signals.formError`；核对/换卡后可安全重试 |
 | `fill_failed` | Card fields not injectable (checkout changed) | Report; do not retry blindly |
 | `no_card_iframe` | Not a payment page / redirected | Re-open from a fresh `cart` |
 | `address_incomplete` | 国家/州没选中或缺字段 | 看 `signals.reason`；补 `--region` 等后重试，或走 assist 兜底 |

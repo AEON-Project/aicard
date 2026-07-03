@@ -312,18 +312,29 @@ export async function fillCheckout(p) {
     }
     await pay.waitFor({ state: "visible", timeout: 10000 });
     await pay.scrollIntoViewIfNeeded().catch(() => {});
+    // ⚠️ 防重复扣款：点 Pay 后款可能已进处理器。标记 paySubmitted，
+    //    上层据此判断——除非明确 declined，否则绝不重试（重试=重复扣款）。
+    result.signals.paySubmitted = true;
     try {
       await pay.click({ timeout: 15000 });
     } catch {
       await pay.click({ timeout: 15000, force: true }); // 装饰性覆盖层拦截时强制点
     }
     // 提交后轮询结果（不用 networkidle，Shopify 埋点长连接会吃满超时）：
-    // 每 1s 探测一次，命中 success/declined/challenge 即停，最多 ~20s（网络慢时结果页需要时间）。
+    // 每 1s 探测一次。success/declined 立即停；challenge_3ds 不立即停——
+    // 大多数 3DS 是 frictionless（无感）：ACS iframe 出现但会自动通过变 success。
+    // 给它最多 ~10s 自动完成；只有持续是挑战才当作“真需要用户输验证码”。
     let outcome = "pending";
+    let challengeStreak = 0;
     for (let i = 0; i < 20; i++) {
       await page.waitForTimeout(1000);
       outcome = await detect(page, result);
-      if (outcome !== "pending") break;
+      if (outcome === "success" || outcome === "declined" || outcome === "address_incomplete") break;
+      if (outcome === "challenge_3ds" || outcome === "challenge_captcha") {
+        if (++challengeStreak >= 10) break; // 持续 ~10s 仍是挑战 → 真挑战（需用户交互）
+        continue; // frictionless：再给几秒自动通过
+      }
+      challengeStreak = 0; // pending：重置
     }
     await shot("06-after-pay");
 
@@ -472,8 +483,10 @@ async function detect(page, result) {
   // 不用泛泛的 "thank you / 感谢"——营销页/footer 常有，会误判成功。
   if (await page.getByText(/your order is confirmed|order is confirmed|confirmation\s*#|订单已确认|订单确认成功/i).count().catch(() => 0)) return "success";
   const fr = page.frames();
-  if (fr.some((f) => /3ds|acs|challenge|secure|authorize/i.test(f.url() || ""))) return "challenge_3ds";
   if (fr.some((f) => /recaptcha|hcaptcha|turnstile/i.test(f.url() || ""))) return "challenge_captcha";
+  // 3DS：只认 ACS/3DS 特征 URL；不用宽泛的 secure|authorize（Shopify 正常 iframe 也含这些词→误报）。
+  // 注意：frictionless 3DS 也会短暂出现此 iframe，靠调用方“持续 ~10s 才当真挑战”的逻辑区分无感/真挑战。
+  if (fr.some((f) => /\b3ds\b|3-?d-?secure|three_?ds|[/.]acs[/.]|acs\d|\/challenge/i.test(f.url() || ""))) return "challenge_3ds";
   const err = await textOf(page.getByText(/declined|incorrect|被拒|not be processed|支付失败|card was declined/i));
   if (err) { result.signals.formError = err.trim().slice(0, 200); return "declined"; }
   // 地址校验红框（State/国家/邮编未选或无效）→ 可恢复的 address_incomplete，而非误判 pending
