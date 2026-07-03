@@ -239,6 +239,11 @@ export async function fillCheckout(p) {
       const b = page.locator(`button:has-text("${label}")`).first();
       if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(1500); }
     }
+    // 提交地址（失焦）触发 Shopify 算运费：最后填的字段仍聚焦时，部分收银台不会去 fetch 运费率，
+    // 导致配送方式一直不出现。主动 blur 当前字段，促使其计算运费。
+    await page.evaluate(() => document.activeElement && document.activeElement.blur()).catch(() => {});
+    await page.waitForTimeout(600);
+
     // 等配送方式真正加载完（骨架→真实单选项）再填卡：Shopify 在配送方式解析完成后会重渲染 payment 区，过早填卡会被清空
     log("Waiting for shipping methods to load…"); // 收银台算运费率可能较久（最多约 45s），此处给出进度、避免看着像卡住
     const ship = await waitShippingReady(page);
