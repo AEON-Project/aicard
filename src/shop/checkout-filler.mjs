@@ -34,6 +34,11 @@ const INPUT = {
 };
 
 // COUNTRY_CODES 来自 country-data.mjs（从真实 Shopify 收银台抠取的 201 国权威数据，见顶部 import）
+// 补充日常简称 → ISO code（country-data 用官方名如 "Hong Kong SAR"，这里补常见叫法，直接用 value 选最可靠）
+Object.assign(COUNTRY_CODES, {
+  "hong kong": "HK", "macau": "MO", "macao": "MO", "taiwan": "TW",
+  "south korea": "KR", "korea": "KR", "russia": "RU", "vietnam": "VN", "uae": "AE",
+});
 
 /**
  * 填卡并提交。
@@ -114,7 +119,8 @@ export async function fillCheckout(p) {
         try {
           await country.waitFor({ state: "visible", timeout: 6000 });
           await page.waitForTimeout(500);
-          result.signals.countrySelected = await selectOptionSmart(country, A.country, COUNTRY_CODES[A.country.toLowerCase()]);
+          const cc = COUNTRY_CODES[A.country.toLowerCase()] || (/^[a-z]{2}$/i.test(A.country.trim()) ? A.country.trim().toUpperCase() : null);
+          result.signals.countrySelected = await selectOptionSmart(country, A.country, cc);
           await page.waitForTimeout(800); // 国家切换后地址/电话字段会重渲染
         } catch {
           result.signals.countrySelected = false;
@@ -148,8 +154,17 @@ export async function fillCheckout(p) {
     const addrErr = await page.getByText(/select a country|select a state|select a province|enter a valid|请选择|请输入有效/i).first().textContent().catch(() => null);
     if (addrErr) result.signals.addressError = addrErr.trim().slice(0, 120);
     if (A.country && result.signals.countrySelected === false) {
+      // dump 该收银台实际支持的国家，准确定位（可能商户不配送该地区，而非名称问题）
+      let avail = [];
+      try {
+        const csel = page.locator('select[autocomplete="country"],select[name*="countryCode" i],select[name*="country" i]').first();
+        avail = await csel.locator("option").evaluateAll((os) => os.map((o) => (o.textContent || "").trim()).filter((t) => t && !/^select|country\/region/i.test(t)));
+      } catch { /* ignore */ }
+      result.signals.availableCountries = avail.slice(0, 25);
       result.outcome = "address_incomplete";
-      result.signals.reason = `国家未能选中：'${A.country}'（收银台无匹配选项，可能名称不同，如 Hong Kong SAR）`;
+      result.signals.reason = avail.length
+        ? `国家 '${A.country}' 未匹配到此收银台的可选项（可能该商户不配送该地区）。可选：${avail.slice(0, 10).join(", ")}${avail.length > 10 ? " …" : ""}`
+        : `国家 '${A.country}' 未能选中，且未能读取收银台国家列表`;
       await shot("02b-address-error");
       if (!p.assist) return finish(browser, result);
     }

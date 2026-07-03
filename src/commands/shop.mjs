@@ -110,6 +110,16 @@ export async function pay(opts) {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(shipping.email).trim()))
       return emitErr("shop.pay", "INVALID_EMAIL", { message: "邮箱格式无效（必须是用户本人真实邮箱，用于收订单/物流）", field: "email" });
 
+    // country 值有效性前置校验（是否已知国家名/ISO 代码）；"该店是否配送该国家"仍需收银台运行时确认
+    const { COUNTRY_CODES, COUNTRIES } = await import("../shop/country-data.mjs");
+    const cin = String(shipping.country).trim().toLowerCase();
+    const countryValid = !!COUNTRY_CODES[cin] || COUNTRIES.some((c) => {
+      const n = c.name.toLowerCase();
+      return c.code.toLowerCase() === cin || n === cin || (cin.length >= 3 && (n.includes(cin) || cin.includes(n)));
+    });
+    if (!countryValid)
+      return emitErr("shop.pay", "INVALID_COUNTRY", { message: `国家 '${shipping.country}' 不是已知国家名或 ISO 代码（示例：United States / US / Hong Kong / GB）`, field: "country" });
+
     const { findUsableCard, markCardUsed } = await import("../shop/cards.mjs");
     const { fillCheckout } = await import("../shop/checkout-filler.mjs");
 
@@ -175,6 +185,19 @@ export async function pay(opts) {
     // 4. 支付成功 → 标记一次性卡已用（退出可用列表）
     if (r.outcome === "success" && orderNo) markCardUsed(orderNo, { usedFor: opts.continueUrl });
 
+    // 根据结果给下一步建议：区分「可 assist 恢复」与「不可恢复（配送限制等）」
+    let suggestion = null;
+    const avail = r.signals?.availableCountries;
+    if (r.outcome === "address_incomplete" && Array.isArray(avail) && avail.length) {
+      const cc = String(opts.country || "").toLowerCase();
+      const supported = avail.some((c) => c.toLowerCase().includes(cc) || cc.includes(c.toLowerCase()));
+      suggestion = supported
+        ? "地址未完整，请核对 --region 等字段后重试。"
+        : `该商户仅配送：${avail.slice(0, 6).join(", ")}${avail.length > 6 ? " …" : ""} —— 收货国家不在其中。请换收货国家或换商户（配送限制，assist 弹窗也无法解决）。`;
+    } else if (["fill_failed", "no_card_iframe", "challenge_3ds", "challenge_captcha"].includes(r.outcome)) {
+      suggestion = "可用 --assist 重跑：弹出可见浏览器窗口，脚本填好已知信息，由用户手动补齐并点付款。";
+    }
+
     // 卡面绝不进 envelope，只回末 4 位与结果
     emitOk("shop.pay", {
       cardSource,
@@ -185,6 +208,7 @@ export async function pay(opts) {
       order: r.order,
       artifacts: r.artifacts,
       signals: r.signals,
+      ...(suggestion ? { suggestion } : {}),
     });
   } catch (e) {
     emitErr("shop.pay", e.code || "SHOP_PAY_FAILED", {

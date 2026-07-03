@@ -12,7 +12,7 @@ Every `aicard` command emits **exactly one line of JSON** to **stdout** —— t
 {
   "ok": true,
   "command": "create",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "data": { /* command-specific payload */ }
 }
 ```
@@ -23,7 +23,7 @@ Every `aicard` command emits **exactly one line of JSON** to **stdout** —— t
 {
   "ok": false,
   "command": "create",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "error": {
     "code": "AMOUNT_OUT_OF_RANGE",
     "message": "Amount must be at least $0.6. Allowed range: $0.6 ~ $800 USD.",

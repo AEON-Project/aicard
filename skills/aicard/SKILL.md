@@ -21,7 +21,7 @@ description: >
 emoji: "💳"
 homepage: https://github.com/AEON-Project/aicard
 metadata:
-  version: "0.9.2"
+  version: "0.9.3"
   author: AEON-Project
   openclaw:
     requires:
@@ -503,7 +503,9 @@ Use `aicard shop cards` to list cached cards (masked last-4 only).
 | `no_card_iframe` | Not a payment page / redirected | Re-open from a fresh `cart` |
 | `address_incomplete` | 国家/州没选中或缺字段 | 看 `signals.reason`；补 `--region` 等后重试，或走 assist 兜底 |
 
-**失败兜底（assist 模式）**：当 outcome 非 `success`/`challenge_*`（如 `fill_failed` / `address_incomplete` / `no_card_iframe`）时，用 assist 重跑——**弹出可见浏览器窗口**、脚本填好已知信息，让用户在窗口里补齐（国家/州/验证码等）并手动点【付款】：
+**失败后先看 `envelope.suggestion`**（它区分两类失败，别无脑 assist）：
+- 「**配送限制**」——该商户不配送此国家（`signals.availableCountries` 列出实际支持的）→ **不要 assist**（弹窗也没用），换收货国家或换商户。
+- 「**可恢复**」——`fill_failed` / `no_card_iframe` / 验证码等 → 用 **assist 模式**重跑：**弹出可见浏览器窗口**、脚本填好已知信息，让用户补齐（国家/州/验证码）并手动点【付款】：
 
 ```bash
 aicard shop pay --assist --continue-url "..." --amount ... --email ... <其余收货参数同上>
