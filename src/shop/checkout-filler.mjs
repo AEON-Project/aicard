@@ -139,17 +139,17 @@ export async function fillCheckout(p) {
       await shot("01b-unavailable");
       return finish(browser, result);
     }
-    // ② 有效收银台可能仍在渲染骨架——给表单字段充足时间出现（命中即退，正常网络 1-3s）。
-    //    30s 仍不出现才判失效（真死链已被 ① 快速拦截，走到这里多是网络异常）。
+    // ② 有效收银台可能仍在渲染骨架——给表单字段充足时间出现（命中即退，正常网络 1-3s，不影响快路径）。
+    //    真死链已被 ① 立即拦截，走到这里多是慢网络，故给到 60s 再判失效，避免误杀有效收银台。
     const checkoutReady = await page
       .locator('input[type="email"],input[name="email"],select[name*="country" i],input[autocomplete="address-line1"],input[name="address1"]')
       .first()
-      .waitFor({ state: "visible", timeout: 30000 })
+      .waitFor({ state: "visible", timeout: 60000 })
       .then(() => true)
       .catch(() => false);
     if (!checkoutReady) {
       result.outcome = "checkout_unavailable";
-      result.signals.reason = "收银台表单 30s 内未加载出来（网络异常或链接失效）。请检查网络或用 `shop cart` 重新生成 continueUrl。";
+      result.signals.reason = "收银台表单 60s 内未加载出来（网络异常或链接失效）。请检查网络或用 `shop cart` 重新生成 continueUrl。";
       await shot("01b-unavailable");
       return finish(browser, result);
     }
@@ -170,18 +170,16 @@ export async function fillCheckout(p) {
       }
     }
     log("填写收货信息…");
-    // 各收货字段相互独立 → 并行填（fill 用 el.fill 直接赋值，非逐字符，可并发；worst-case 取最慢字段而非累加）。
-    // 国家已先选完（region 依赖它），此处只并行文本字段。
-    await Promise.all([
-      fill('input[type="email"],input[name="email"],input#email', A.email),
-      fill('input[autocomplete="given-name"],input[name="firstName"]', A.first),
-      fill('input[autocomplete="family-name"],input[name="lastName"]', A.last),
-      fill('input[autocomplete="address-line1"],input[name="address1"]', A.address1),
-      A.address2 ? fill('input[autocomplete="address-line2"],input[name="address2"]', A.address2) : Promise.resolve(),
-      fill('input[autocomplete="address-level2"],input[name="city"],input[placeholder*="City" i],input[placeholder*="城市" i]', A.city),
-      fill('input[autocomplete="postal-code"],input[name="postalCode"],input[name="zip"],input[placeholder*="Postal" i],input[placeholder*="邮政" i]', A.zip),
-      fill('input[autocomplete="tel"],input[type="tel"]', A.phone),
-    ]);
+    // ⚠️ 顺序填，勿并行：实测并发 fill() 在部分收银台会字段错位（邮箱进 First name、姓并进 Address 等）。
+    // 正确性 > 省那 1s。fill 用 el.fill 直接赋值，本身很快，顺序总耗时也就 1-2s。
+    await fill('input[type="email"],input[name="email"],input#email', A.email);
+    await fill('input[autocomplete="given-name"],input[name="firstName"]', A.first);
+    await fill('input[autocomplete="family-name"],input[name="lastName"]', A.last);
+    await fill('input[autocomplete="address-line1"],input[name="address1"]', A.address1);
+    if (A.address2) await fill('input[autocomplete="address-line2"],input[name="address2"]', A.address2);
+    await fill('input[autocomplete="address-level2"],input[name="city"],input[placeholder*="City" i],input[placeholder*="城市" i]', A.city);
+    await fill('input[autocomplete="postal-code"],input[name="postalCode"],input[name="zip"],input[placeholder*="Postal" i],input[placeholder*="邮政" i]', A.zip);
+    await fill('input[autocomplete="tel"],input[type="tel"]', A.phone);
     if (A.region) {
       // State/省 下拉常在国家选中后才异步出现，快轮询等它出现（~4s 上限，命中即退）
       let st = null;
@@ -320,10 +318,10 @@ export async function fillCheckout(p) {
       await pay.click({ timeout: 15000, force: true }); // 装饰性覆盖层拦截时强制点
     }
     // 提交后轮询结果（不用 networkidle，Shopify 埋点长连接会吃满超时）：
-    // 每 800ms 探测一次，命中 success/declined/challenge 即停，最多 ~12s。
+    // 每 1s 探测一次，命中 success/declined/challenge 即停，最多 ~20s（网络慢时结果页需要时间）。
     let outcome = "pending";
-    for (let i = 0; i < 15; i++) {
-      await page.waitForTimeout(800);
+    for (let i = 0; i < 20; i++) {
+      await page.waitForTimeout(1000);
       outcome = await detect(page, result);
       if (outcome !== "pending") break;
     }
@@ -468,7 +466,11 @@ async function assistWait(browser, result, page, shot, log, p) {
 
 async function detect(page, result) {
   const u = page.url();
-  if (/\/(thank_you|thank-you|orders)\b/.test(u) || (await page.getByText(/thank you|order confirmed|订单已确认|感谢|谢谢/i).count().catch(() => 0))) return "success";
+  // 成功以 URL 为主（Shopify 订单状态页最可靠）：/thank-you /thank_you 或 /orders/<id>。
+  if (/\/(thank_you|thank-you)\b/.test(u) || /\/orders\/[A-Za-z0-9]/.test(u)) return "success";
+  // 文本兜底：只认强确认措辞（"order is confirmed" / "confirmation #" / 订单已确认），
+  // 不用泛泛的 "thank you / 感谢"——营销页/footer 常有，会误判成功。
+  if (await page.getByText(/your order is confirmed|order is confirmed|confirmation\s*#|订单已确认|订单确认成功/i).count().catch(() => 0)) return "success";
   const fr = page.frames();
   if (fr.some((f) => /3ds|acs|challenge|secure|authorize/i.test(f.url() || ""))) return "challenge_3ds";
   if (fr.some((f) => /recaptcha|hcaptcha|turnstile/i.test(f.url() || ""))) return "challenge_captcha";

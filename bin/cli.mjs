@@ -200,6 +200,7 @@ shop
   .option("--headful", "Show the browser (needed for manual 3DS/OTP)", false)
   .option("--assist", "兜底：脚本失败时弹可见窗口，填好已知信息后让用户手动完成并提交", false)
   .option("--fill-only", "Fill card but do NOT submit (test only, no charge)", false)
+  .option("--allow-test", "允许在测试店后端下单（默认拦截 twinoakstest 等测试店）", false)
   .option("--wait-otp <ms>", "On 3DS/captcha, wait for OTP relay file up to N ms")
   .option("--otp-file <path>", "OTP relay file path (default ./otp.txt)")
   .option("--out <dir>", "Screenshot output dir (default ./artifacts)")

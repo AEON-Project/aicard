@@ -78,11 +78,16 @@ export async function cart(opts) {
     if (!opts.shop) return emitErr("shop.cart", "MISSING_SHOP", { message: "缺少 --shop（商户域名，来自 search 结果的 merchantDomain）" });
     if (!opts.variant) return emitErr("shop.cart", "MISSING_VARIANT", { message: "缺少 --variant（商品规格 gid，来自 search 结果）" });
     const { createCart } = await import("../shop/cart.mjs");
+    const { isTestStore } = await import("../shop/catalog.mjs");
     const c = await createCart({
       shopDomain: opts.shop,
       items: [{ variantId: opts.variant, quantity: opts.qty ? Number(opts.qty) : 1 }],
       address: { country: opts.country, region: opts.region, postalCode: opts.zip },
     });
+    // 检测收银台真实后端：vanity 域名（如 naturallife.com）可能套在测试店（twinoakstest.myshopify.com）上，
+    // 只有 continueUrl 才暴露后端。标记出来，供 pay 拦截 / 用户知情。
+    const backendHost = (() => { try { return new URL(c.continueUrl).host; } catch { return null; } })();
+    const testBackend = isTestStore(backendHost);
     emitOk("shop.cart", {
       cartId: c.cartId,
       currency: c.currency,
@@ -91,6 +96,9 @@ export async function cart(opts) {
       shipping: c.shipping,
       total: c.total,
       continueUrl: c.continueUrl,
+      backendHost,
+      testBackend, // true = 收银台后端是测试店（如 twinoakstest），下单非真实交易
+      ...(testBackend ? { warning: `⚠️ 该商户收银台后端是测试店（${backendHost}），下单不是真实交易。shop pay 默认会拦截，如确需测试加 --allow-test。` } : {}),
       lineItems: c.lineItems,
       expiresAt: c.expiresAt,
     });
@@ -105,6 +113,17 @@ export async function pay(opts) {
     if (!opts.continueUrl) return emitErr("shop.pay", "NO_URL", { message: "缺少 --continue-url（来自 shop cart 的 continueUrl）" });
     const amount = opts.amount != null ? Number(opts.amount) : null;
     if (!amount || isNaN(amount) || amount <= 0) return emitErr("shop.pay", "NO_AMOUNT", { message: "缺少或非法 --amount（应等于购物车 total，正数）" });
+
+    // 拦截测试店：continueUrl 的后端 host 才是真实收银台后端（vanity 域名可能套在 twinoakstest 等测试店上）。
+    // 默认禁用测试商家；确需测试用 --allow-test 放行。
+    const backendHost = (() => { try { return new URL(opts.continueUrl).host; } catch { return null; } })();
+    const { isTestStore } = await import("../shop/catalog.mjs");
+    if (isTestStore(backendHost) && !opts.allowTest) {
+      return emitErr("shop.pay", "TEST_STORE_BLOCKED", {
+        message: `收银台后端是测试店（${backendHost}），下单不是真实交易，已拦截。若确需在测试店下单，加 --allow-test。`,
+        backendHost,
+      });
+    }
 
     // 收货信息严格校验 → 结构化错误（逻辑严谨，一次性列出所有缺失）
     const shipping = { email: opts.email, first: opts.first, last: opts.last, address1: opts.address1, city: opts.city, zip: opts.zip, country: opts.country, phone: opts.phone };

@@ -21,7 +21,7 @@ description: >
 emoji: "💳"
 homepage: https://github.com/AEON-Project/aicard
 metadata:
-  version: "0.9.7"
+  version: "0.9.8"
   author: AEON-Project
   openclaw:
     requires:
@@ -452,6 +452,8 @@ First collect ship-to **country + postal code** (affects tax/shipping):
 ```bash
 aicard shop cart --shop <merchantDomain> --variant <variantId> [--qty 1] --country US --zip 10001
 ```
+
+> ⚠️ **测试店检测（重要）**：`cart` 返回里若 `testBackend:true`，说明该商户收银台**后端是测试店**（如 `twinoakstest.myshopify.com`）——有些商户用自定义域名（如 `naturallife.com`）套在测试店上，光看域名看不出来，只有 `continueUrl` 的后端 host 才暴露。**这种下单不是真实交易**。`shop pay` **默认会拦截**（`TEST_STORE_BLOCKED`）；遇到就**告知用户该商户是测试店、换一家真实商户**，不要盲目加 `--allow-test`（仅内部测试才用）。
 
 Show the breakdown, then **先查缓存卡再给确认话术**（`aicard shop cards`，找 `used:false && amount ≥ total` 的卡），据此二选一：
 

@@ -41,6 +41,7 @@ export const ERROR_CODES = {
   // ===== Shop 参数/校验（exit 1）=====
   NO_URL:                  { exit: 1, message: "Missing --continue-url." },
   NO_AMOUNT:              { exit: 1, message: "Missing or invalid --amount." },
+  TEST_STORE_BLOCKED:     { exit: 1, message: "Checkout backend is a test store; blocked. Use --allow-test to override." },
   MISSING_ID:             { exit: 1, message: "Missing product id (--id)." },
   MISSING_SHOP:           { exit: 1, message: "Missing merchant domain (--shop)." },
   MISSING_VARIANT:        { exit: 1, message: "Missing ProductVariant id (--variant)." },
