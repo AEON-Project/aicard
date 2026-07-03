@@ -509,6 +509,7 @@ aicard shop pay \
   - ⚠️ 查进度别用 `sleep N; tail/cat`（会被 harness 拦）；用 `run_in_background` + 直接读输出文件或 Monitor 监听 `验证码`/`outcome`。
   - `--assist`（弹窗人工完成）只在会话式 OTP 也走不通时才用。
 - 🚫 **绝不因 `challenge_3ds` 反复用不带 --wait-otp 重跑**——补完 3DS 只用**一次** `--wait-otp`。`pending`/`error`（点过 Pay、结果不明）则一律不重跑、先核实（见下方防重复扣款铁律）。
+- 🏷️ **付款进度如实显示,别用"Creating Agent Card"**：`shop pay` 命中缓存卡时**不创建卡、不动钱包**（CLI 日志是 `> 命中本地缓存卡 •••• {last4}…付款`）。展示进度请如实说「用缓存卡 •••• {last4} 付款中…」；仅当 `cardSource:"new"`（确无可用卡、从钱包发新卡）才说「开新卡付款中」。「Creating Agent Card…」是 `create` 命令的文案，**付款阶段不要显示**。
 
 **Card selection is automatic (no wallet needed if a card exists)**:
 1. `pay` first reuses a **cached card** whose face value ≥ order total → skips the wallet entirely.
