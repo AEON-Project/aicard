@@ -5,6 +5,7 @@
  * continue_url 即后续 CheckoutFiller 打开的收银台地址。
  */
 import { ucpCall, shopEndpoint } from "./ucp.mjs";
+import { toIso } from "./catalog.mjs";
 
 /**
  * 创建购物车。
@@ -22,7 +23,8 @@ export async function createCart(p) {
 
   if (p.address) {
     const ctx = {};
-    if (p.address.country) ctx.address_country = p.address.country;
+    // UCP address_country 只认 ISO-2；接受国家全名（如 "United States"）并自动转 ISO，与 search --country 行为统一。
+    if (p.address.country) ctx.address_country = toIso(p.address.country);
     if (p.address.region) ctx.address_region = p.address.region;
     if (p.address.postalCode) ctx.postal_code = p.address.postalCode;
     if (Object.keys(ctx).length) cart.context = ctx;

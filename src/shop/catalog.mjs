@@ -209,8 +209,9 @@ export function isTestStore(domain) {
   return /(^|[-_])(test|demo|sandbox|staging)([-_]|$)/.test(store) || /(^test|test$|^demo|demo$|sandbox|staging)/.test(store);
 }
 
-/** 国家名或 ISO → ISO-2（UCP context.address_country 用 ISO；search --country 可传名或 ISO） */
-function toIso(c) {
+/** 国家名或 ISO → ISO-2（UCP context.address_country 用 ISO；search/cart --country 可传名或 ISO）。
+ *  唯一实现，供 catalog(search) 与 cart 共用，统一"接受国家全名"的行为。 */
+export function toIso(c) {
   if (!c) return c;
   const cin = String(c).trim().toLowerCase();
   if (/^[a-z]{2}$/.test(cin)) return cin.toUpperCase();
