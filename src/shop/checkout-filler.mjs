@@ -352,7 +352,12 @@ export async function fillCheckout(p) {
           const want = String(p.card[k]).replace(/\s/g, "");
           let cur = (await inp.inputValue().catch(() => "")).replace(/\s/g, "");
           if (cur !== want) {
-            await inp.click();
+            // 点击聚焦：部分商户(如 redragonshop)卡 iframe 输入框"可见但点不动"(被遮挡/不稳定)，
+            // 默认 click 会每字段干等满 30s 后 fill_failed。缩短超时 + scrollIntoView + force 兜底，点不动就强制点。
+            await inp.click({ timeout: 4000 }).catch(async () => {
+              await inp.scrollIntoViewIfNeeded().catch(() => {});
+              await inp.click({ timeout: 4000, force: true }).catch(() => {});
+            });
             await inp.fill("").catch(() => {});
             await inp.type(String(p.card[k]), { delay: 40 });
             await inp.evaluate((el) => el.blur()).catch(() => {}); // 触发 Shopify 卡字段校验/格式化
