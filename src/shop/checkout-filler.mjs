@@ -159,9 +159,21 @@ export async function fillCheckout(p) {
       .waitFor({ state: "visible", timeout: 60000 })
       .then(() => true)
       .catch(() => false);
-    if (!checkoutReady) {
+    let ready = checkoutReady;
+    if (!ready) {
+      // 兜底：reload 一次再等——偶发首屏没渲染出表单（如 ivyusa 首访），重载常能救回，避免误报 checkout_unavailable
+      log("Checkout form not visible yet; reloading once…");
+      await page.reload({ waitUntil: "commit", timeout: 20000 }).catch(() => {});
+      ready = await page
+        .locator('input[type="email"],input[name="email"],select[name*="country" i],input[autocomplete="address-line1"],input[name="address1"]')
+        .first()
+        .waitFor({ state: "visible", timeout: 30000 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    if (!ready) {
       result.outcome = "checkout_unavailable";
-      result.signals.reason = "收银台表单 60s 内未加载出来（网络异常或链接失效）。请检查网络或用 `shop cart` 重新生成 continueUrl。";
+      result.signals.reason = "收银台表单加载失败（重载后仍未出现表单，多为网络异常或链接失效）。请检查网络或用 `shop cart` 重新生成 continueUrl。";
       await shot("01b-unavailable");
       return finish(browser, result);
     }
@@ -192,25 +204,28 @@ export async function fillCheckout(p) {
     await fill('input[autocomplete="address-level2"],input[name="city"],input[placeholder*="City" i],input[placeholder*="城市" i]', A.city);
     await fill('input[autocomplete="postal-code"],input[name="postalCode"],input[name="zip"],input[placeholder*="Postal" i],input[placeholder*="邮政" i]', A.zip);
     await fill('input[autocomplete="tel"],input[type="tel"]', A.phone);
+
+    // 填完邮箱后，Shop 可能弹出 "Confirm it's you" 登录框（灰色遮罩挡住州选择/配送/卡字段）。
+    // 在选州之前就关掉它 = 跳过登录、以访客继续（免 OTP）。稍等它渲染出来再关。
+    await page.waitForTimeout(600);
+    await dismissOverlays(page);
     if (A.region) {
-      // State/省 下拉常在国家选中后才异步出现，快轮询等它出现（~4s 上限，命中即退）
-      let st = null;
-      for (let i = 0; i < 16; i++) {
-        const cand = page.locator('select[autocomplete*="address-level1" i],select[name="zone" i],select[name*="province" i],select[name*="state" i]').first();
-        if (await cand.count()) { st = cand; break; }
-        await page.waitForTimeout(250);
-      }
-      if (st) {
-        try {
-          await st.waitFor({ state: "visible", timeout: 4000 });
-          await page.waitForTimeout(250); // 等 options 异步加载
-          result.signals.regionSelected = await selectOptionSmart(st, A.region, null);
-        } catch {
-          result.signals.regionSelected = false;
+      // State/省 下拉：优先【可见】的那个——部分收银台有多个同名 zone select，隐藏的只有占位项，
+      // 用 .first() 会误抓到它导致选不中（实测 dallastoyswholesale/idspring 均如此）。
+      // 等它可见 + options 真正灌入（选完国家后异步填充）再选，并轮询重试到选中或超时（~7s）。
+      const visSel = 'select[autocomplete*="address-level1" i]:visible,select[name="zone" i]:visible,select[name*="province" i]:visible,select[name*="state" i]:visible';
+      const anySel = 'select[autocomplete*="address-level1" i],select[name="zone" i],select[name*="province" i],select[name*="state" i]';
+      let ok = false;
+      for (let i = 0; i < 28 && !ok; i++) {
+        let st = page.locator(visSel).first();
+        if (!(await st.count().catch(() => 0))) st = page.locator(anySel).first(); // 无可见则退而求其次
+        if (await st.count().catch(() => 0)) {
+          const optCount = await st.locator("option").count().catch(() => 0);
+          if (optCount > 1) ok = await selectOptionSmart(st, A.region, null); // options 已灌入（不止占位项）才选
         }
-      } else {
-        result.signals.regionSelected = false; // 下拉始终没出现
+        if (!ok) await page.waitForTimeout(250);
       }
+      result.signals.regionSelected = ok;
     }
     await shot("02-address");
     _perf("address-filled");
@@ -251,6 +266,8 @@ export async function fillCheckout(p) {
       const b = page.locator(`button:has-text("${label}")`).first();
       if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(1500); }
     }
+    // 点“继续”后 Shop 登录弹窗可能再次出现（遮挡配送/卡字段）——再关一次跳过登录。
+    await dismissOverlays(page);
     // 提交地址（失焦）触发 Shopify 算运费：最后填的字段仍聚焦时，部分收银台不会去 fetch 运费率，
     // 导致配送方式一直不出现。主动 blur 当前字段，促使其计算运费。
     await page.evaluate(() => document.activeElement && document.activeElement.blur()).catch(() => {});
@@ -262,6 +279,21 @@ export async function fillCheckout(p) {
     result.signals.shippingReady = ship.picked;
     _perf("shipping-ready");
     await shot("03-shipping");
+
+    // 配送不可用（如批发店最低起订/重量门槛）：收银台会明确报错。以【报错文案】为准判定——
+    // 哪怕有残留 radio 让 ship.picked 误报，只要出现 "Shipping not available / do not meet" 等，
+    // 就是发不了货，点 Pay 必失败。提前拦截、返回 shipping_not_ready（未填卡、未提交、未扣款），
+    // 让上层清楚提示“该单不满足配送要求，请调整购物车或换商户”，而不是去撞一个注定失败的付款。
+    const shipErr = await textOf(
+      page.getByText(/shipping (is )?not available|not (eligible|available) for shipping|do not meet|does not qualify|no shipping (methods|options) available|无法配送|不满足.*配送|没有可用的?配送/i)
+    );
+    if (shipErr) {
+      result.outcome = "shipping_not_ready";
+      result.signals.shippingReady = false; // 以报错为准，纠正可能被残留 radio 带偏的 picked
+      result.signals.reason = `收银台配送不可用：${shipErr.slice(0, 160)}（常见于批发店最低起订额/重量门槛；未填卡、未扣款）。请调整购物车数量/金额或换商户。`;
+      await shot("03b-shipping-unavailable");
+      if (!p.assist) return finish(browser, result);
+    }
 
     // 等待卡字段 iframe
     log("Waiting for and filling card details…");
@@ -468,8 +500,10 @@ export async function fillCheckout(p) {
 /** 选中下拉：ISO code(value，语言无关) → label 精确 → 动态遍历 options 模糊匹配
  *  解决 "Hong Kong" vs "Hong Kong SAR"、本地化 label、简称/全称差异 */
 async function selectOptionSmart(sel, name, code) {
+  // 每次 selectOption 限时 2.5s：目标下拉可能是隐藏/占位空壳（多个同名 zone select 时会误抓到它），
+  // 不加超时则每次失败各卡默认 30s，多次尝试累计数分钟。命中正确下拉时 2.5s 绰绰有余。
   const trySel = async (arg) => {
-    try { await sel.selectOption(arg); return true; } catch { return false; }
+    try { await sel.selectOption(arg, { timeout: 2500 }); return true; } catch { return false; }
   };
   if (code && (await trySel({ value: code }))) return true;
   if (await trySel({ label: name })) return true;
@@ -553,9 +587,15 @@ async function waitShippingReady(page) {
   for (let i = 0; i < 150 && !picked; i++) { // 最多 ~45s 等运费率加载（配送必需，尽量等它出来）；命中即退出
     if ((await radios.count().catch(() => 0)) > 0) {
       const first = radios.first();
-      if (!(await first.isChecked().catch(() => false))) await first.check().catch(() => {});
-      picked = true;
-      break;
+      if (await first.isVisible().catch(() => false)) { // 只认可见 radio——"配送不可用"态常留隐藏 radio，会误判就绪
+        if (!(await first.isChecked().catch(() => false))) await first.check().catch(() => {});
+        picked = await first.isChecked().catch(() => false); // 确认真的选中了才算就绪（check 可能被重渲染吞掉）
+        if (picked) break;
+      }
+    }
+    // 每 ~5s 主动 blur 当前字段一次，促使 Shopify 重新拉取运费率——骨架长时间卡住常因运费请求没被触发
+    if (i > 0 && i % 16 === 0) {
+      await page.evaluate(() => document.activeElement && document.activeElement.blur()).catch(() => {});
     }
     await page.waitForTimeout(300); // 骨架加载中或该单无配送方式（数字商品/免运费）
   }
@@ -564,6 +604,10 @@ async function waitShippingReady(page) {
   return { picked, required };
 }
 
+// 关掉遮挡结账表单的弹窗，重点是 Shop "Confirm it's you" 登录框：
+// 邮箱被识别为已有 Shop 账号时会弹出它（带灰色遮罩，挡住州选择/配送/卡字段）。
+// 我们的目标是【跳过登录、以访客身份继续结账】——所以只关闭弹窗，绝不点 "Send code"/"Continue"
+//（那会触发 OTP 登录，反而要用户去收验证码）。关闭即免 OTP。
 async function dismissOverlays(page) {
   await page.keyboard.press("Escape").catch(() => {});
   const closers = [
@@ -571,6 +615,7 @@ async function dismissOverlays(page) {
     'button[aria-label*="close" i]',
     'button[aria-label*="dismiss" i]',
     'button[aria-label*="关闭"]',
+    '[role="button"][aria-label*="close" i]',
     '[role="dialog"] button:has-text("✕")',
     '[role="dialog"] button:has-text("×")',
   ];
@@ -582,11 +627,13 @@ async function dismissOverlays(page) {
       /* ignore */
     }
   }
-  // Shop 弹窗常在 shop/pay iframe 内
+  // Shop 弹窗常渲染在 shop/pay iframe 内（或其 shadow DOM，Playwright CSS 会自动穿透 open shadow root）
   for (const f of page.frames()) {
     if (/shop|pay/i.test((f.url() || "") + (f.name() || ""))) {
       try {
-        const b = f.locator('button[aria-label*="close" i], button:has-text("×"), button:has-text("✕")').first();
+        const b = f
+          .locator('button[aria-label*="close" i], [role="button"][aria-label*="close" i], button:has-text("×"), button:has-text("✕")')
+          .first();
         if (await b.count()) await b.click({ timeout: 800 });
       } catch {
         /* ignore */
