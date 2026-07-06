@@ -322,6 +322,11 @@ export async function fillCheckout(p) {
     await dismissOverlays(page); // 关闭 Shop "Confirm it's you" 等遮挡卡字段的弹窗
     _perf("overlays-dismissed");
 
+    // 勾选"账单地址同收货地址"：部分商户（如 eyeshinecosmetics）默认【不勾】且账单地址必填——
+    // 不勾则点 Pay 会触发账单地址一堆必填红框（Enter a first name/city/ZIP…）、无法提交、白点一次 Pay。
+    // 勾上即以收货地址作账单地址，跳过手填账单。
+    result.signals.billingSameAsShipping = await ensureBillingSameAsShipping(page, log);
+
     // 填卡（可重复调用）：每字段先读现值，缺失/被清空才重填，blur 触发校验格式化。返回 number/expiry/cvc 是否都已就位
     const fillCard = async () => {
       for (const k of ["number", "expiry", "cvc", "name"]) {
@@ -416,61 +421,126 @@ export async function fillCheckout(p) {
     }
     await shot("06-after-pay");
 
-    // 3DS/验证码降级：等待用户把验证码写入 otpFile 后自动回填
+    // 3DS/验证码降级：多步导航（如 UQPAY：选认证方式 → Next[此步触发发码] → 出现 OTP 输入框 → 填码 → Submit）。
+    // 单一循环内：① 先看是否已到 OTP 输入步；到了就等验证码文件并回填提交；② 没到就点“下一步/发送”推进多步流程；
+    // 全程轮询终态。验证码由用户写入 otpFile 后自动回填。
     if ((outcome === "challenge_3ds" || outcome === "challenge_captcha") && waitOtpMs > 0) {
       result.signals.challenge = outcome;
       await shot("07-challenge");
-      // 多步 3DS（如 UQPAY：选认证方式 → Next → OTP 发到邮箱）：枚举所有 frame 的可点击元素，按文本匹配点前进按钮触发发码
+      log(`Verification required (${outcome}). Navigating 3DS; provide the code → it will be read from ${otpFile}.`);
       await page.waitForTimeout(2000); // 等 3DS iframe 加载
-      let advanced = false;
-      for (let round = 0; round < 2 && !advanced; round++) {
+
+      // 定位 3DS 挑战 frame：优先 URL 特征（UQPAY/AlchemyPay/ACS/3DS/challenge），再退回文本特征。
+      // 关键：只在该 frame 内找 OTP 框/点按钮——否则会误匹配 Shopify 主页面的地址/邮箱文本框，误判“已到输入步”。
+      const find3dsFrame = async () => {
         for (const fr of page.frames()) {
-          const cands = await fr.locator('button, input[type="submit"], input[type="button"], [role="button"], a').all().catch(() => []);
-          for (const c of cands) {
-            try {
-              const t = (((await c.textContent().catch(() => "")) || "") + " " + ((await c.getAttribute("value").catch(() => "")) || "")).trim().toLowerCase();
-              if (/next|continue|获取|下一步|submit|verify|confirm|proceed|send|发送|确定/.test(t) && (await c.isVisible().catch(() => false))) {
-                await c.click({ timeout: 3000 });
-                advanced = true;
-                result.signals.threeDSAdvanced = t.slice(0, 24);
-                log("Clicked 3DS advance button: " + t.slice(0, 24));
-                await page.waitForTimeout(3000);
-                break;
-              }
-            } catch { /* 下一个 */ }
-          }
-          if (advanced) break;
+          if (/uqpay|alchemypay|acs|three_?ds|3-?d-?secure|emv3ds|threeds|\/challenge/i.test(fr.url() || "")) return fr;
         }
-        if (!advanced) await page.waitForTimeout(1500);
-      }
-      if (!advanced) result.signals.threeDSAdvanced = false;
-      await shot("07b-otp-step");
-      log(`Verification code required (${outcome}). Send triggered — please provide the code; it will be written to ${otpFile} and filled in.`);
-      const deadline = Date.now() + waitOtpMs;
-      let filled = false;
-      while (Date.now() < deadline) {
-        await page.waitForTimeout(2500);
-        if (!filled && existsSync(otpFile)) {
-          const code = readFileSync(otpFile, "utf8").trim();
-          if (code) {
-            log("Verification code received, filling in…");
-            for (const fr of page.frames()) {
-              try {
-                const inp = fr.locator('input[type="text"],input[type="tel"],input[autocomplete="one-time-code"],input[name*="otp" i],input[name*="code" i]').first();
-                if (await inp.count()) {
-                  await inp.fill(code);
-                  const sub = fr.locator('button[type="submit"],button:has-text("Submit"),button:has-text("Verify"),button:has-text("确认"),button:has-text("提交")').first();
-                  if (await sub.count()) await sub.click().catch(() => {});
-                  filled = true;
-                  break;
-                }
-              } catch { /* 换下一个 frame */ }
+        for (const fr of page.frames()) {
+          try {
+            if (await fr.getByText(/transaction verification|authentication mode|secure checkout|verification code|one[- ]time|请输入|验证码/i).count().catch(() => 0)) return fr;
+          } catch { /* 下一个 */ }
+        }
+        return null;
+      };
+      // 在 3DS frame 内找【可见】OTP 输入框：先按 otp/code 特征，再退回该 frame 内的通用输入框
+      const findOtpInput = async (fr) => {
+        if (!fr) return null;
+        const sels = [
+          'input[autocomplete="one-time-code"],input[name*="otp" i],input[name*="code" i],input[id*="otp" i],input[id*="code" i],input[placeholder*="otp" i],input[placeholder*="code" i]',
+          'input[type="tel"],input[type="text"],input[type="password"],input[type="number"]',
+        ];
+        for (const sel of sels) {
+          try {
+            const inp = fr.locator(sel).first();
+            if ((await inp.count()) && (await inp.isVisible().catch(() => false))) return inp;
+          } catch { /* 下一个 */ }
+        }
+        return null;
+      };
+      // 在 3DS frame 内点“下一步/发送”推进多步（不含 Submit/Verify——那属于填码后的提交步，避免过早提交空表单）
+      const clickAdvance = async (fr) => {
+        if (!fr) return false;
+        const cands = await fr.locator('button, input[type="submit"], input[type="button"], [role="button"], a').all().catch(() => []);
+        for (const c of cands) {
+          try {
+            if (!(await c.isVisible().catch(() => false))) continue;
+            const t = (((await c.textContent().catch(() => "")) || "") + " " + ((await c.getAttribute("value").catch(() => "")) || "")).trim().toLowerCase();
+            if (/^(next|continue|proceed|get otp|send code|获取|下一步|发送)\b/.test(t) || /^(next|continue|proceed)$/.test(t)) {
+              await c.click({ timeout: 3000 });
+              result.signals.threeDSAdvanced = t.slice(0, 30);
+              log("3DS advance: " + t.slice(0, 30));
+              return true;
             }
-            await page.waitForTimeout(4000);
-          }
+          } catch { /* 下一个 */ }
         }
+        return false;
+      };
+      // 在 3DS frame 内填码并提交：回车 + 遍历可点元素按文本匹配 SUBMIT（不依赖 role/tag，兼容 <a>/<div>/<input>）。
+      // getByRole("button") 对 UQPAY 的非语义 SUBMIT（<div>/<a>）返回 0 → 跳过点击 → 码填了没提交。
+      // 改用与 clickAdvance 相同、已验证可点 "Next" 的遍历方式；click 失败再 force 兜底。
+      const submitOtp = async (fr, inp, code) => {
+        await inp.click().catch(() => {});
+        await inp.fill(code).catch(() => {});
+        await inp.press("Enter").catch(() => {}); // 很多 OTP 表单回车即提交
+        const cands = await fr.locator('button, input[type="submit"], input[type="button"], [role="button"], a, div[onclick], span[onclick], [class*="btn" i], [class*="button" i]').all().catch(() => []);
+        for (const c of cands) {
+          try {
+            if (!(await c.isVisible().catch(() => false))) continue;
+            const t = (((await c.textContent().catch(() => "")) || "") + " " + ((await c.getAttribute("value").catch(() => "")) || "")).trim().toLowerCase();
+            if (/^(submit|verify|confirm|continue|ok|确认|提交|验证|下一步)\b/.test(t) || /^(submit|verify|confirm|continue|ok)$/.test(t)) {
+              await c.scrollIntoViewIfNeeded().catch(() => {});
+              await c.click({ timeout: 4000 }).catch(async () => {
+                await c.click({ timeout: 4000, force: true }).catch(() => {});
+              });
+              return;
+            }
+          } catch { /* 下一个 */ }
+        }
+      };
+
+      const deadline = Date.now() + waitOtpMs;
+      let otpRequested = false;
+      let submitCount = 0;
+      let lastSubmit = 0;
+      let lastAdvance = 0;
+      while (Date.now() < deadline) {
         outcome = await detect(page, result);
         if (outcome === "success" || outcome === "declined") break;
+
+        const fr = await find3dsFrame();
+        const inp = await findOtpInput(fr);
+        if (inp) {
+          // 已到 OTP 输入步。OTP 框仍在 = 尚未提交成功：填码并提交，未推进则每 ~8s 重试（最多 3 次）。
+          if (!otpRequested) {
+            otpRequested = true;
+            await shot("07b-otp-step");
+            log("OTP input ready — waiting for the code…");
+          }
+          if (existsSync(otpFile) && submitCount < 3 && Date.now() - lastSubmit > 5000) {
+            const code = readFileSync(otpFile, "utf8").trim();
+            if (code) {
+              log(`Submitting verification code (attempt ${submitCount + 1})…`);
+              await submitOtp(fr, inp, code);
+              submitCount++;
+              lastSubmit = Date.now();
+              await page.waitForTimeout(4000);
+              // 诊断：截图 + dump 提交后 3DS frame 的可见文案（报错/拒付/processing 一目了然）
+              await shot(`otp-try${submitCount}`);
+              try {
+                const f2 = await find3dsFrame();
+                const t2 = f2 ? ((await f2.locator("body").textContent().catch(() => "")) || "").replace(/\s+/g, " ").trim().slice(0, 260) : "(no 3ds frame)";
+                log(`3DS frame after submit ${submitCount}: ${t2}`);
+              } catch { /* ignore */ }
+            }
+          }
+        } else if (submitCount === 0 && Date.now() - lastAdvance > 4000) {
+          // 尚未出现 OTP 输入框：在 3DS frame 内点“下一步/发送”推进（该步会触发发码到发卡方邮箱/手机）
+          lastAdvance = Date.now();
+          if (!(await clickAdvance(fr))) result.signals.threeDSAdvanced ??= false;
+          await page.waitForTimeout(2500);
+        }
+        await page.waitForTimeout(1500);
       }
       await shot("08-after-challenge");
     }
@@ -562,17 +632,44 @@ async function detect(page, result) {
   // 文本兜底：只认强确认措辞（"order is confirmed" / "confirmation #" / 订单已确认），
   // 不用泛泛的 "thank you / 感谢"——营销页/footer 常有，会误判成功。
   if (await page.getByText(/your order is confirmed|order is confirmed|confirmation\s*#|订单已确认|订单确认成功/i).count().catch(() => 0)) return "success";
+  // ⚠️ 明确的拒付/错误文案必须【先于】frame 挑战检测：Shopify 收银台常驻一个隐藏 turnstile frame，
+  //    若先判 captcha frame 会永远命中它、把"declined"挡在后面 → 拒付探测不到、空转到超时（实测本次）。
+  const err = await textOf(
+    page.getByText(/declined|incorrect|insufficient funds|not be processed|could not be processed|支付失败|card was declined|余额不足|无法处理/i)
+  );
+  if (err) { result.signals.formError = err.trim().slice(0, 200); return "declined"; }
+  // 地址校验红框（State/国家/邮编未选或无效）→ 可恢复的 address_incomplete，而非误判 pending
+  const addrErr = await textOf(page.getByText(/select a (state|province|country)|enter a valid|请选择.*(州|省|国家)|请输入有效/i));
+  if (addrErr) { result.signals.addressError = addrErr.trim().slice(0, 120); return "address_incomplete"; }
   const fr = page.frames();
   if (fr.some((f) => /recaptcha|hcaptcha|turnstile/i.test(f.url() || ""))) return "challenge_captcha";
   // 3DS：只认 ACS/3DS 特征 URL；不用宽泛的 secure|authorize（Shopify 正常 iframe 也含这些词→误报）。
   // 注意：frictionless 3DS 也会短暂出现此 iframe，靠调用方“持续 ~10s 才当真挑战”的逻辑区分无感/真挑战。
   if (fr.some((f) => /\b3ds\b|3-?d-?secure|three_?ds|[/.]acs[/.]|acs\d|\/challenge/i.test(f.url() || ""))) return "challenge_3ds";
-  const err = await textOf(page.getByText(/declined|incorrect|被拒|not be processed|支付失败|card was declined/i));
-  if (err) { result.signals.formError = err.trim().slice(0, 200); return "declined"; }
-  // 地址校验红框（State/国家/邮编未选或无效）→ 可恢复的 address_incomplete，而非误判 pending
-  const addrErr = await textOf(page.getByText(/select a (state|province|country)|enter a valid|请选择.*(州|省|国家)|请输入有效/i));
-  if (addrErr) { result.signals.addressError = addrErr.trim().slice(0, 120); return "address_incomplete"; }
   return "pending";
+}
+
+// 勾选"账单地址同收货地址"复选框（Shopify 新版收银台 id=billingAddressCheckbox / name=billingAddress）。
+// 返回是否已勾选（已勾或成功勾上=true）。不存在该复选框（如账单区默认就是"same as shipping"）也返回 true——
+// 表示"无需手填账单"这一前提成立，不阻断流程。
+async function ensureBillingSameAsShipping(page, log) {
+  const cb = page.locator('#billingAddressCheckbox,input[type="checkbox"][name="billingAddress" i]').first();
+  try {
+    if (!(await cb.count())) {
+      // 无该复选框：可能是 radio 式账单选择（"Same as shipping"默认选中）或无独立账单区——不阻断
+      return true;
+    }
+    if (await cb.isChecked().catch(() => false)) return true;
+    // check() 优先；被自定义样式覆盖时点其 label 兜底
+    await cb.check({ timeout: 3000 }).catch(async () => {
+      await page.locator('label[for="billingAddressCheckbox"]').first().click({ timeout: 2000 }).catch(() => {});
+    });
+    const ok = await cb.isChecked().catch(() => false);
+    if (ok && log) log("Billing address set to same as shipping");
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 /** 关闭会遮挡卡字段的弹窗（Shop "Confirm it's you" 登录框等） */
@@ -583,15 +680,25 @@ async function waitShippingReady(page) {
   // required=是否存在“Shipping method”区（存在却没选上 = 未就绪，点 Pay 会卡在 Processing）。
   const radios = page.locator('input[type="radio"][name*="delivery" i],input[type="radio"][name*="shipping" i]');
   const heading = page.getByText(/shipping method|delivery method|配送方式|运送方式|shipping options/i);
+  // 单一配送方式时 Shopify 新版收银台【不渲染可勾选 radio】，而是把该方式渲染成静态行（默认即选中，
+  // 容器 id 含 shipping_methods-<hash>）。只认 radio 会对这类收银台系统性误报 picked=false → 误判
+  // shipping_not_ready。故一并识别这类"已渲染出配送方式行"作为"已就绪/默认选中"（仅在无 radio 时启用，
+  // 避免与多选项 radio 分支抢答）。
+  const methodRow = page.locator('[id*="shipping_method" i],[id*="delivery_method" i]');
   let picked = false;
   for (let i = 0; i < 150 && !picked; i++) { // 最多 ~45s 等运费率加载（配送必需，尽量等它出来）；命中即退出
-    if ((await radios.count().catch(() => 0)) > 0) {
+    const radioCount = await radios.count().catch(() => 0);
+    if (radioCount > 0) {
       const first = radios.first();
       if (await first.isVisible().catch(() => false)) { // 只认可见 radio——"配送不可用"态常留隐藏 radio，会误判就绪
         if (!(await first.isChecked().catch(() => false))) await first.check().catch(() => {});
         picked = await first.isChecked().catch(() => false); // 确认真的选中了才算就绪（check 可能被重渲染吞掉）
         if (picked) break;
       }
+    } else if ((await methodRow.count().catch(() => 0)) > 0 && (await methodRow.first().isVisible().catch(() => false))) {
+      // 无 radio 但配送方式行已渲染出来（单一方式，默认选中）= 已就绪
+      picked = true;
+      break;
     }
     // 每 ~5s 主动 blur 当前字段一次，促使 Shopify 重新拉取运费率——骨架长时间卡住常因运费请求没被触发
     if (i > 0 && i % 16 === 0) {
