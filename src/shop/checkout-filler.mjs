@@ -295,6 +295,18 @@ export async function fillCheckout(p) {
       if (!p.assist) return finish(browser, result);
     }
 
+    // 主动选中"Credit card"支付方式：部分收银台默认落在 Shop Pay/PayPal，信用卡区收起，卡 iframe 不挂载。
+    // 已选中则不动；未选中才点（radio id=basic-creditCards，或按文本匹配）。不阻断——选不中交给下方 iframe 检测判定。
+    try {
+      const ccRadio = page.locator('#basic-creditCards,input[type="radio"][id*="creditcard" i],input[type="radio"][value*="creditcard" i]').first();
+      if ((await ccRadio.count()) && !(await ccRadio.isChecked().catch(() => false))) {
+        await ccRadio.check({ timeout: 2500 }).catch(async () => {
+          await page.getByText(/^\s*credit card\s*$|credit\/debit card|信用卡/i).first().click({ timeout: 2000 }).catch(() => {});
+        });
+        await page.waitForTimeout(700); // 等卡 iframe 挂载
+      }
+    } catch { /* ignore：交给下方卡 iframe 检测 */ }
+
     // 等待卡字段 iframe
     log("Waiting for and filling card details…");
     let found = false;
@@ -534,6 +546,24 @@ export async function fillCheckout(p) {
               } catch { /* ignore */ }
             }
           }
+          // 提交后扫描 3DS frame 内错误文案（主页面 detect 看不到 iframe 内部）→ 快速失败，不空转到超时。
+          if (submitCount > 0 && fr) {
+            const ferr = await textOf(fr.getByText(/incorrect|invalid|failed|expired|wrong|does ?n['’]?t match|not match|错误|无效|过期|失败|不正确/i));
+            if (ferr) {
+              outcome = "challenge_3ds";
+              result.signals.otpError = ferr.trim().slice(0, 120);
+              result.signals.reason = `验证码未通过：${ferr.trim().slice(0, 80)}（码错/过期）。请重新获取验证码后重试。`;
+              log("OTP rejected by 3DS: " + ferr.trim().slice(0, 60));
+              break;
+            }
+            // 3 次提交后仍停在输入框、且无明确报错 → 提前中止（码错/过期或提交未被接受），不空转到超时
+            if (submitCount >= 3 && Date.now() - lastSubmit > 12000) {
+              outcome = "challenge_3ds";
+              result.signals.reason = "验证码提交 3 次后仍停在输入步（码错/过期或提交未被接受）。请重新获取验证码后重试。";
+              log("OTP not accepted after 3 attempts — aborting early");
+              break;
+            }
+          }
         } else if (submitCount === 0 && Date.now() - lastAdvance > 4000) {
           // 尚未出现 OTP 输入框：在 3DS frame 内点“下一步/发送”推进（该步会触发发码到发卡方邮箱/手机）
           lastAdvance = Date.now();
@@ -649,27 +679,46 @@ async function detect(page, result) {
   return "pending";
 }
 
-// 勾选"账单地址同收货地址"复选框（Shopify 新版收银台 id=billingAddressCheckbox / name=billingAddress）。
-// 返回是否已勾选（已勾或成功勾上=true）。不存在该复选框（如账单区默认就是"same as shipping"）也返回 true——
-// 表示"无需手填账单"这一前提成立，不阻断流程。
+// 把账单地址归一化为"同收货地址"，兼容两种 Shopify 收银台账单控件：
+//   ① 复选框 "Use shipping address as billing address"（id=billingAddressCheckbox / name=billingAddress）
+//   ② 单选按钮 "Same as shipping address" / "Use a different billing address"
+// 返回是否已置为"同收货"（已是/成功置上=true；控件存在却置不上=false；无已知控件=true 不阻断）。
+// 只补齐、绝不反向操作（已勾/已选的不会取消）。
 async function ensureBillingSameAsShipping(page, log) {
-  const cb = page.locator('#billingAddressCheckbox,input[type="checkbox"][name="billingAddress" i]').first();
+  // ① 标准复选框：默认已勾→原样；未勾→勾上（check 被自定义样式吞掉时点 label 兜底）
   try {
-    if (!(await cb.count())) {
-      // 无该复选框：可能是 radio 式账单选择（"Same as shipping"默认选中）或无独立账单区——不阻断
-      return true;
+    const cb = page.locator('#billingAddressCheckbox,input[type="checkbox"][name="billingAddress" i]').first();
+    if (await cb.count()) {
+      if (await cb.isChecked().catch(() => false)) return true;
+      await cb.check({ timeout: 3000 }).catch(async () => {
+        await page.locator('label[for="billingAddressCheckbox"]').first().click({ timeout: 2000 }).catch(() => {});
+      });
+      const ok = await cb.isChecked().catch(() => false);
+      if (ok && log) log("Billing address set to same as shipping (checkbox)");
+      return ok; // 有复选框即以它为准
     }
-    if (await cb.isChecked().catch(() => false)) return true;
-    // check() 优先；被自定义样式覆盖时点其 label 兜底
-    await cb.check({ timeout: 3000 }).catch(async () => {
-      await page.locator('label[for="billingAddressCheckbox"]').first().click({ timeout: 2000 }).catch(() => {});
-    });
-    const ok = await cb.isChecked().catch(() => false);
-    if (ok && log) log("Billing address set to same as shipping");
-    return ok;
-  } catch {
-    return false;
-  }
+  } catch { /* 落到 radio 分支 */ }
+
+  // ② 单选按钮式：选中"Same as shipping address"（默认可能选中了"用不同账单地址"，需切回）
+  try {
+    const sameRadio = page
+      .getByRole("radio", { name: /same as shipping|use shipping address as billing|billing.*same as shipping|账单.*(相同|同).*收货|与收货地址相同/i })
+      .first();
+    if (await sameRadio.count()) {
+      if (await sameRadio.isChecked().catch(() => false)) return true;
+      await sameRadio.check({ timeout: 3000 }).catch(() => {});
+      if (!(await sameRadio.isChecked().catch(() => false))) {
+        // check 被自定义样式吞掉时点关联 label 文本兜底
+        await page.getByText(/same as shipping address|use shipping address as billing|与收货地址相同/i).first().click({ timeout: 2000 }).catch(() => {});
+      }
+      const ok = await sameRadio.isChecked().catch(() => false);
+      if (ok && log) log("Billing address set to same as shipping (radio)");
+      return ok;
+    }
+  } catch { /* ignore */ }
+
+  // ③ 既无复选框也无已知 radio：多为无独立账单区/默认即同收货——不阻断
+  return true;
 }
 
 /** 关闭会遮挡卡字段的弹窗（Shop "Confirm it's you" 登录框等） */
