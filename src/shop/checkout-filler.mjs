@@ -10,6 +10,7 @@
  */
 import { mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { resolve as pathResolve, join as pathJoin } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { COUNTRY_CODES } from "./country-data.mjs";
 
@@ -62,18 +63,7 @@ async function textOf(locator) {
  * @returns {Promise<{outcome:string, signals:object, artifacts:string[], order:object|null}>}
  */
 export async function fillCheckout(p) {
-  let chromium;
-  try {
-    ({ chromium } = await import("playwright"));
-  } catch (e) {
-    // 带出真实错误：常见是 playwright 装了但依赖 playwright-core 缺失（optionalDependencies 半截安装），
-    // 而非"完全没装"。统一报 PLAYWRIGHT_MISSING 会掩盖真因、把人带偏。
-    const detail = (e?.message || "").split("\n")[0];
-    throw new FillError(
-      "PLAYWRIGHT_MISSING",
-      `无法加载 playwright（购物/收银台自动化所需）：${detail}。修复：npm i -g playwright（会一并补上 playwright-core）；若提示缺浏览器内核再运行 npx playwright install chromium`
-    );
-  }
+  const chromium = await loadPlaywrightChromium(p.onProgress);
 
   if (!p.continueUrl) throw new FillError("NO_URL", "缺少 continueUrl");
   if (!p.card?.number || !p.card?.expiry || !p.card?.cvc) throw new FillError("NO_CARD", "缺少完整卡面");
@@ -858,6 +848,44 @@ export async function extractOrder(page) {
     total: total || null,
     shippingMethod: shippingMethod ? shippingMethod.replace(/\s+/g, " ").trim().slice(0, 80) : null,
   };
+}
+
+// 加载 playwright（购物/收银台自动化所需），带【运行时自愈】：
+// 全局包被后台自动更新重装后，optionalDependencies 的 playwright 常半截安装
+// （本包内 node_modules/playwright 残缺 / playwright-core 缺失），import 失败。
+// 此处失败即尝试 npm i -g playwright 修复；本包内若残留【损坏】副本会遮蔽全局解析，删之令其回退。
+// 修复完成后重试；ESM 可能缓存失败解析 → 明确提示重跑（安装已就绪，下次即可用）。
+async function loadPlaywrightChromium(log) {
+  const say = log || (() => {});
+  try {
+    return (await import("playwright")).chromium;
+  } catch (e1) {
+    const d1 = (e1?.message || "").split("\n")[0];
+    say("playwright 加载失败,尝试自动修复(npm i -g playwright)…：" + d1);
+    try {
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("npm", ["i", "-g", "playwright"], { stdio: ["ignore", 2, 2], timeout: 300000 });
+    } catch (ie) {
+      throw new FillError(
+        "PLAYWRIGHT_MISSING",
+        `playwright 加载失败且自动修复未成功（${d1}）。请手动运行：npm i -g playwright（权限不足加 sudo）;必要时再 npx playwright install chromium`
+      );
+    }
+    // 删掉本包内【损坏】的 playwright/playwright-core 副本（无 package.json）——它会遮蔽刚装好的全局副本
+    try {
+      const pkgNM = pathResolve(fileURLToPath(import.meta.url), "../../../node_modules");
+      for (const dep of ["playwright", "playwright-core"]) {
+        const dp = pathJoin(pkgNM, dep);
+        if (existsSync(dp) && !existsSync(pathJoin(dp, "package.json"))) rmSync(dp, { recursive: true, force: true });
+      }
+    } catch { /* ignore */ }
+    try {
+      say("playwright 已修复,重试加载…");
+      return (await import("playwright")).chromium;
+    } catch {
+      throw new FillError("PLAYWRIGHT_REPAIRED_RERUN", "playwright 已自动修复完成,请重新运行刚才的命令即可。");
+    }
+  }
 }
 
 // 启动浏览器；若浏览器内核未下载（常见于纯发卡用户首次购物），懒加载自动下 chromium 后重试。
