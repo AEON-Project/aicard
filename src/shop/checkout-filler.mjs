@@ -262,6 +262,10 @@ export async function fillCheckout(p) {
       if (!p.assist) return finish(browser, result);
     }
 
+    // 勾选“必填的同意/条款”复选框：经典多步收银台常在 Information 步要求勾 T&C/隐私/年龄确认，
+    // 不勾则“Continue to shipping”点不动、到不了支付页（实测 1stphorm）。只勾必填/明显条款项，绝不碰营销订阅。
+    result.signals.termsAccepted = await acceptRequiredTerms(page, log);
+
     // 多步 checkout：逐个点“继续”把支付区带出来
     for (const label of ["Continue to shipping", "继续", "Continue to payment", "Continue"]) {
       const b = page.locator(`button:has-text("${label}")`).first();
@@ -278,6 +282,7 @@ export async function fillCheckout(p) {
     log("Waiting for shipping methods to load…"); // 收银台算运费率可能较久（最多约 45s），此处给出进度、避免看着像卡住
     const ship = await waitShippingReady(page);
     result.signals.shippingReady = ship.picked;
+    result.signals.shippingVia = ship.via; // 遥测：配送就绪的识别分支(radio/methodRow/priced/none)
     _perf("shipping-ready");
     await shot("03-shipping");
 
@@ -690,6 +695,41 @@ async function detect(page, result) {
 //   ② 单选按钮 "Same as shipping address" / "Use a different billing address"
 // 返回是否已置为"同收货"（已是/成功置上=true；控件存在却置不上=false；无已知控件=true 不阻断）。
 // 只补齐、绝不反向操作（已勾/已选的不会取消）。
+// 勾选"必填的同意/条款"复选框（T&C / 隐私 / 年龄确认 / 加州 P65 等），否则 Continue 点不动、进不了支付页。
+// 判定：必填(required/aria-required) 或 label/name/id 含条款同意类词；【严格排除】营销订阅(news/offers/marketing)。
+// 返回勾上的数量。只补齐、force 兜底自定义样式复选框；绝不勾可选营销项。
+async function acceptRequiredTerms(page, log) {
+  let checked = 0;
+  const els = await page.locator('input[type="checkbox"],[role="checkbox"]').all().catch(() => []);
+  const isCk = async (cb, input) => (input ? await cb.isChecked().catch(() => false) : (await cb.getAttribute("aria-checked").catch(() => "")) === "true");
+  for (const cb of els) {
+    try {
+      const input = ((await cb.getAttribute("role").catch(() => "")) || "") !== "checkbox";
+      if (await isCk(cb, input)) continue;
+      const name = ((await cb.getAttribute("name").catch(() => "")) || "").toLowerCase();
+      const id = ((await cb.getAttribute("id").catch(() => "")) || "").toLowerCase();
+      const aria = ((await cb.getAttribute("aria-label").catch(() => "")) || "").toLowerCase();
+      // 关联/邻近文本：祖先 label → label[for] → 父容器(div/li/fieldset)文本
+      let txt = ((await cb.locator("xpath=ancestor::label[1]").first().textContent().catch(() => "")) || "");
+      if (!txt && id) txt = ((await page.locator(`label[for="${id.replace(/["\\]/g, "\\$&")}"]`).first().textContent().catch(() => "")) || "");
+      if (!txt) txt = (((await cb.locator("xpath=ancestor::*[self::div or self::li or self::fieldset][1]").first().textContent().catch(() => "")) || "")).slice(0, 220);
+      const t = (name + " " + id + " " + aria + " " + txt).toLowerCase();
+      if (/market|news|offers|newsletter|subscrib|opt.?in|email me|text me|\bsms\b|promo|recurring automated/.test(t)) continue; // 营销订阅：跳过
+      const required = (await cb.getAttribute("required").catch(() => null)) !== null || (await cb.getAttribute("aria-required").catch(() => "")) === "true";
+      const termsy = /terms|condition|\bagree|\baccept|i have read|privacy|policy|consent|acknowledg|18\s*year|\bage\b|prop.?65|warning|chemical|\blead\b|cancer|reproductive|birth defect|同意|条款|已阅读|年满|授权/.test(t);
+      if (!required && !termsy) continue;
+      if (input) {
+        await cb.check({ timeout: 2500 }).catch(() => cb.check({ timeout: 2000, force: true }).catch(() => cb.click({ timeout: 1500, force: true }).catch(() => {})));
+      } else {
+        await cb.click({ timeout: 2000 }).catch(() => cb.click({ timeout: 1500, force: true }).catch(() => {}));
+      }
+      if (await isCk(cb, input)) checked++;
+    } catch { /* 下一个 */ }
+  }
+  if (checked && log) log(`Accepted ${checked} required agreement/terms checkbox(es)`);
+  return checked;
+}
+
 async function ensureBillingSameAsShipping(page, log) {
   // ① 标准复选框：默认已勾→原样；未勾→勾上（check 被自定义样式吞掉时点 label 兜底）
   try {
@@ -747,6 +787,7 @@ async function waitShippingReady(page) {
   // 进入即先 blur 一次主动触发算费——越早触发运费请求，就绪越快（否则要等下方周期性 blur）。
   await page.evaluate(() => document.activeElement && document.activeElement.blur()).catch(() => {});
   let picked = false;
+  let via = "none"; // 遥测：靠哪条分支判定就绪(radio 多选项 / methodRow 单选项 / priced 经典摘要 / none 未就绪)
   for (let i = 0; i < 150 && !picked; i++) { // 最多 ~45s 等运费率加载（配送必需，尽量等它出来）；命中即退出
     const radioCount = await radios.count().catch(() => 0);
     if (radioCount > 0) {
@@ -754,15 +795,17 @@ async function waitShippingReady(page) {
       if (await first.isVisible().catch(() => false)) { // 只认可见 radio——"配送不可用"态常留隐藏 radio，会误判就绪
         if (!(await first.isChecked().catch(() => false))) await first.check().catch(() => {});
         picked = await first.isChecked().catch(() => false); // 确认真的选中了才算就绪（check 可能被重渲染吞掉）
-        if (picked) break;
+        if (picked) { via = "radio"; break; }
       }
     } else if ((await methodRow.count().catch(() => 0)) > 0 && (await methodRow.first().isVisible().catch(() => false))) {
       // 无 radio 但配送方式行已渲染出来（单一方式，默认选中）= 已就绪
       picked = true;
+      via = "methodRow";
       break;
     } else if ((await priced.count().catch(() => 0)) > 0 && (await priced.first().isVisible().catch(() => false))) {
       // 经典多步收银台：支付页只有"Shipping … $X.XX"已计价摘要，无配送控件 = 配送已在上一步选定 = 已就绪
       picked = true;
+      via = "priced";
       break;
     }
     // 每 ~2.5s 主动 blur 一次，促使 Shopify 重新拉取运费率——骨架长时间卡住常因运费请求没被触发。
@@ -774,7 +817,7 @@ async function waitShippingReady(page) {
   }
   const required = (await heading.count().catch(() => 0)) > 0; // 有运费区标题=本单需要运费方式
   await page.waitForTimeout(350); // 短暂 settle；卡字段被清空由“提交前复检重填”兜底
-  return { picked, required };
+  return { picked, required, via };
 }
 
 // 关掉遮挡结账表单的弹窗，重点是 Shop "Confirm it's you" 登录框：
