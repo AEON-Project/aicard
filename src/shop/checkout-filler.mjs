@@ -82,14 +82,47 @@ export async function fillCheckout(p) {
 
   const browser = await launchWithAutoInstall(chromium, {
     headless: !(p.headful || p.assist), // assist 兜底模式强制可见窗口，让用户手动完成
-    args: ["--disable-blink-features=AutomationControlled"],
+    // stealth 借鉴 browser-use：不破解验证码，只让自动化浏览器更不像 bot → 降低 Shop 反爬挑战触发率。
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--disable-features=IsolateOrigins,site-per-process,AutomationControlled",
+      "--disable-infobars",
+      "--no-default-browser-check",
+      "--no-first-run",
+    ],
   }, log);
   const ctx = await browser.newContext({
     locale: "en-US",
+    timezoneId: "America/Los_Angeles", // 与收货地址(加州)一致，避免时区/地理指纹矛盾
     viewport: { width: 1280, height: 1600 },
+    deviceScaleFactor: 2,
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
   });
-  await ctx.addInitScript(() => Object.defineProperty(navigator, "webdriver", { get: () => undefined }));
+  // 指纹隐身：抹掉常见 headless/自动化特征（webdriver / languages / plugins / chrome runtime / permissions / WebGL vendor）。
+  // 纯"更像真人"的伪装，不涉及破解验证码；只在避免触发挑战这一层借鉴 browser-use。
+  await ctx.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] }); // 非空插件列表
+    window.chrome = window.chrome || { runtime: {} }; // headless 下常缺失 window.chrome
+    const origQuery = window.navigator.permissions && window.navigator.permissions.query;
+    if (origQuery) {
+      window.navigator.permissions.query = (params) =>
+        params && params.name === "notifications"
+          ? Promise.resolve({ state: Notification.permission })
+          : origQuery(params);
+    }
+    // WebGL 厂商/渲染器伪装成常见真实值（headless 会暴露 SwiftShader/Google 等特征）
+    try {
+      const getParam = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function (p) {
+        if (p === 37445) return "Intel Inc."; // UNMASKED_VENDOR_WEBGL
+        if (p === 37446) return "Intel Iris OpenGL Engine"; // UNMASKED_RENDERER_WEBGL
+        return getParam.call(this, p);
+      };
+    } catch { /* ignore */ }
+  });
   const page = await ctx.newPage();
   page.setDefaultTimeout(30000);
 
