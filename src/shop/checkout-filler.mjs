@@ -267,9 +267,19 @@ export async function fillCheckout(p) {
     result.signals.termsAccepted = await acceptRequiredTerms(page, log);
 
     // 多步 checkout：逐个点“继续”把支付区带出来
-    for (const label of ["Continue to shipping", "继续", "Continue to payment", "Continue"]) {
-      const b = page.locator(`button:has-text("${label}")`).first();
-      if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(1500); }
+    const clickContinue = async () => {
+      for (const label of ["Continue to shipping", "继续", "Continue to payment", "Continue"]) {
+        const b = page.locator(`button:has-text("${label}")`).first();
+        if (await b.count()) { await b.click().catch(() => {}); await page.waitForTimeout(1500); }
+      }
+    };
+    await clickContinue();
+    // 反应式条款兜底：若被“请接受条款”校验拦下（acceptRequiredTerms 因无标签/动态无属性没抓到的 React 受控框），
+    // 点复选框的【可见包裹】(label[for]/祖先 label/父级)触发 React onChange——直接改隐藏 input 的 checked 不生效——再重试 Continue。
+    const termsErr = await textOf(page.getByText(/please indicate.*(terms|condition)|accept the terms|must accept|must agree|please agree.*(terms|condition)|请.*(同意|接受).*条款/i));
+    if (termsErr) {
+      const n = await acceptTermsReactive(page, log);
+      if (n) { result.signals.termsAccepted = (result.signals.termsAccepted || 0) + n; await clickContinue(); }
     }
     // 点“继续”后 Shop 登录弹窗可能再次出现（遮挡配送/卡字段）——再关一次跳过登录。
     await dismissOverlays(page);
@@ -728,6 +738,33 @@ async function acceptRequiredTerms(page, log) {
   }
   if (checked && log) log(`Accepted ${checked} required agreement/terms checkbox(es)`);
   return checked;
+}
+
+// 反应式条款兜底：仅在出现"请接受条款"校验后调用。对未勾的非营销复选框，点其【可见包裹】
+// (label[for] → 祖先 label → 父元素)触发 React onChange —— Shopify React 受控框直接改隐藏 input
+// 的 checked 不会被框架采纳，必须走真实点击。既然校验已明说要条款，此处对无标签/无属性的框也放行点击。
+async function acceptTermsReactive(page, log) {
+  let clicked = 0;
+  const boxes = await page.locator('input[type="checkbox"]').all().catch(() => []);
+  for (const cb of boxes) {
+    try {
+      if (await cb.isChecked().catch(() => false)) continue;
+      const name = ((await cb.getAttribute("name").catch(() => "")) || "").toLowerCase();
+      const id = ((await cb.getAttribute("id").catch(() => "")) || "");
+      let near = ((await cb.locator("xpath=ancestor::*[self::label or self::div or self::li][1]").first().textContent().catch(() => "")) || "");
+      if (!near && id) near = ((await page.locator(`label[for="${id.replace(/["\\]/g, "\\$&")}"]`).first().textContent().catch(() => "")) || "");
+      const t = (name + " " + id + " " + near).toLowerCase();
+      if (/market|news|offers|newsletter|subscrib|opt.?in|email me|text me|\bsms\b|promo|recurring automated/.test(t)) continue; // 营销订阅：跳过
+      // 点可见包裹触发 React：label[for] → 祖先 label → 父元素
+      if (id) await page.locator(`label[for="${id.replace(/["\\]/g, "\\$&")}"]`).first().click({ timeout: 1500 }).catch(() => {});
+      if (!(await cb.isChecked().catch(() => false))) await cb.locator("xpath=ancestor::label[1]").first().click({ timeout: 1500 }).catch(() => {});
+      if (!(await cb.isChecked().catch(() => false))) await cb.locator("xpath=..").first().click({ timeout: 1500 }).catch(() => {});
+      await page.waitForTimeout(200);
+      if (await cb.isChecked().catch(() => false)) clicked++;
+    } catch { /* 下一个 */ }
+  }
+  if (clicked && log) log(`Reactively accepted ${clicked} terms checkbox(es) via wrapper click`);
+  return clicked;
 }
 
 async function ensureBillingSameAsShipping(page, log) {
