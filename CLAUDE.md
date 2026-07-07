@@ -30,7 +30,31 @@ npm run wallet
 node scripts/release.mjs
 ```
 
-No build step — all source is native ES Modules (`.mjs`), executed directly by Node.js >=18. No test suite exists.
+No build step — all source is native ES Modules (`.mjs`), executed directly by Node.js >=18.
+
+## Testing
+
+```bash
+# 单元测试（纯逻辑，无网络）
+node --test test/create-logic.test.mjs
+
+# 端到端购物演示（真实检索→填卡，fill-only 不提交、不扣款）
+node test/demo-flow.mjs                       # 可选 Q="mini refrigerator" 换品类
+
+# 收银台填单 兼容性+效率 回归 harness（多商户跨品类，fill-only，采集分阶段耗时 + shippingVia）
+node test/checkout-fill.mjs                    # 默认品类各 1 家冒烟
+AICARD_TEST_PER_CAT=3 node test/checkout-fill.mjs   # 每品类 3 家，更广覆盖
+AICARD_TEST_SHOPS="shop.com|gid://shopify/ProductVariant/123" node test/checkout-fill.mjs  # 只测指定 shop|variant（逗号分隔多个）
+```
+
+**`test/checkout-fill.mjs`** 是收银台改动的主回归工具，验证「填单到点击支付前」的成功率与耗时：
+- **判据**：`outcome=filled_no_submit` 且 `shippingReady/billingSameAsShipping/卡四字段` 全 true = 成功；其余（`shipping_not_ready`/`card_not_supported`/`checkout_unavailable`/`bot_blocked`…）多为真实商户约束，逐条列出。
+- **前置**：本地有可用缓存卡（`aicard shop cards` 至少 1 张 usable）；需联网。
+- **安全**：全程 `--fill-only` 只填不提交——不真实下单、不扣款、不消费卡。
+- **产出**：填单成功率、按品类、用时分解（**我方固定开销 vs 商户算运费等待**——长尾变量在后者，非脚本）、`shippingVia` 结构分布（radio 多选项 / methodRow 单选项 / priced 经典多步摘要）。
+- **可配 env**：`AICARD_TEST_PER_CAT`、`AICARD_TEST_SHOPS`、`AICARD_TEST_EMAIL`、`AICARD_TEST_{COUNTRY,REGION,CITY,ZIP}`、`AICARD_TEST_RESULTS`。结果落盘 `os.tmpdir()/aicard-fill-results.jsonl`，断了重跑自动续，删除即全量重测。
+
+**反爬 / 慢商户排查**：设 `AICARD_PERF=1` 跑 `shop pay` 会打印分阶段耗时（`country-done`/`fields-filled`/`shipping-ready`/`card-filled`）到 stderr；总时长长尾几乎全来自商户实时算运费（不可控）。被 Cloudflare/反爬拦截会返回 `outcome=bot_blocked`——可设 `AICARD_PROXY`/`HTTPS_PROXY` 走住宅代理换出口 IP 降低触发（不破解验证码）。真遇验证码用 `--assist` 有头模式人工解。
 
 ## Architecture
 
