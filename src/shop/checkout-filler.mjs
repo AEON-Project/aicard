@@ -740,6 +740,10 @@ async function waitShippingReady(page) {
   // shipping_not_ready。故一并识别这类"已渲染出配送方式行"作为"已就绪/默认选中"（仅在无 radio 时启用，
   // 避免与多选项 radio 分支抢答）。
   const methodRow = page.locator('[id*="shipping_method" i],[id*="delivery_method" i]');
+  // 经典多步收银台（Cart›Information›Shipping›Payment 分页）：配送在上一步已选，Payment 页无 radio/methodRow，
+  // 仅以"Shipping … $X.XX"摘要行呈现。识别【已计价的配送摘要】= 配送已定，避免空等 45s、且防误判 shipping_not_ready。
+  // 要求 $ 紧跟 shipping 且带两位小数——避开促销横幅（如 "Order $150 … Free Standard Shipping"，$ 在 shipping 前）。
+  const priced = page.getByText(/shipping\b[^$\n]{0,25}\$\s?\d{1,4}[.,]\d{2}/i);
   // 进入即先 blur 一次主动触发算费——越早触发运费请求，就绪越快（否则要等下方周期性 blur）。
   await page.evaluate(() => document.activeElement && document.activeElement.blur()).catch(() => {});
   let picked = false;
@@ -754,6 +758,10 @@ async function waitShippingReady(page) {
       }
     } else if ((await methodRow.count().catch(() => 0)) > 0 && (await methodRow.first().isVisible().catch(() => false))) {
       // 无 radio 但配送方式行已渲染出来（单一方式，默认选中）= 已就绪
+      picked = true;
+      break;
+    } else if ((await priced.count().catch(() => 0)) > 0 && (await priced.first().isVisible().catch(() => false))) {
+      // 经典多步收银台：支付页只有"Shipping … $X.XX"已计价摘要，无配送控件 = 配送已在上一步选定 = 已就绪
       picked = true;
       break;
     }
