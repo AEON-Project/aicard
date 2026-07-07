@@ -65,8 +65,14 @@ export async function fillCheckout(p) {
   let chromium;
   try {
     ({ chromium } = await import("playwright"));
-  } catch {
-    throw new FillError("PLAYWRIGHT_MISSING", "未安装 playwright。请运行：npm i -g playwright && npx playwright install chromium");
+  } catch (e) {
+    // 带出真实错误：常见是 playwright 装了但依赖 playwright-core 缺失（optionalDependencies 半截安装），
+    // 而非"完全没装"。统一报 PLAYWRIGHT_MISSING 会掩盖真因、把人带偏。
+    const detail = (e?.message || "").split("\n")[0];
+    throw new FillError(
+      "PLAYWRIGHT_MISSING",
+      `无法加载 playwright（购物/收银台自动化所需）：${detail}。修复：npm i -g playwright（会一并补上 playwright-core）；若提示缺浏览器内核再运行 npx playwright install chromium`
+    );
   }
 
   if (!p.continueUrl) throw new FillError("NO_URL", "缺少 continueUrl");
