@@ -93,9 +93,12 @@ export async function fillCheckout(p) {
   const page = await ctx.newPage();
   page.setDefaultTimeout(30000);
 
+  // 诊断截图用【视口】而非 fullPage：fullPage 需整页渲染+拼接，长收银台页每张 ~0.5-1s，
+  // 多张累计数秒纯开销；视口截图快很多且已覆盖当前可视区(1280×1600)足够定位问题。
+  // 注意：成功凭证图另在 success 分支单独 fullPage 截取，不受此影响。
   const shot = async (tag) => {
     const path = pathResolve(outDir, `co-${tag}.png`);
-    await page.screenshot({ path, fullPage: true }).catch(() => {});
+    await page.screenshot({ path }).catch(() => {});
     result.artifacts.push(path);
     return path;
   };
@@ -112,8 +115,8 @@ export async function fillCheckout(p) {
         // 兜底：逐字符输入触发控件、等下拉出现、Esc 关下拉保留已输入文本，再回读。
         await el.click().catch(() => {});
         await el.fill("").catch(() => {});
-        await el.type(String(val), { delay: 30 });
-        await page.waitForTimeout(500); // 等自动补全下拉渲染
+        await el.type(String(val), { delay: 18 });
+        await page.waitForTimeout(300); // 等自动补全下拉渲染
         await page.keyboard.press("Escape").catch(() => {}); // 关下拉、保留输入的文本
         v = await el.inputValue().catch(() => "");
       }
@@ -135,7 +138,7 @@ export async function fillCheckout(p) {
         if (attempt < 3) { log(`Checkout load timed out, retrying ${attempt}/2…`); await page.waitForTimeout(1000); }
       }
     }
-    await page.waitForTimeout(800);
+    await page.waitForTimeout(400);
     await shot("01-open");
 
     // 收银台有效性早检（两段，避免误杀“正在加载骨架”的有效收银台）：
@@ -180,15 +183,16 @@ export async function fillCheckout(p) {
       if (await country.count()) {
         try {
           await country.waitFor({ state: "visible", timeout: 6000 });
-          await page.waitForTimeout(200);
+          await page.waitForTimeout(150);
           const cc = COUNTRY_CODES[A.country.toLowerCase()] || (/^[a-z]{2}$/i.test(A.country.trim()) ? A.country.trim().toUpperCase() : null);
           result.signals.countrySelected = await selectOptionSmart(country, A.country, cc);
-          await page.waitForTimeout(400); // 国家切换后地址/电话字段会重渲染
+          await page.waitForTimeout(250); // 国家切换后地址/电话字段会重渲染
         } catch {
           result.signals.countrySelected = false;
         }
       }
     }
+    _perf("country-done");
     log("Filling shipping info…");
     // ⚠️ 顺序填，勿并行：实测并发 fill() 在部分收银台会字段错位（邮箱进 First name、姓并进 Address 等）。
     // 正确性 > 省那 1s。fill 用 el.fill 直接赋值，本身很快，顺序总耗时也就 1-2s。
@@ -200,10 +204,11 @@ export async function fillCheckout(p) {
     await fill('input[autocomplete="address-level2"],input[name="city"],input[placeholder*="City" i],input[placeholder*="城市" i]', A.city);
     await fill('input[autocomplete="postal-code"],input[name="postalCode"],input[name="zip"],input[placeholder*="Postal" i],input[placeholder*="邮政" i]', A.zip);
     await fill('input[autocomplete="tel"],input[type="tel"]', A.phone);
+    _perf("fields-filled");
 
     // 填完邮箱后，Shop 可能弹出 "Confirm it's you" 登录框（灰色遮罩挡住州选择/配送/卡字段）。
     // 在选州之前就关掉它 = 跳过登录、以访客继续（免 OTP）。稍等它渲染出来再关。
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(400);
     await dismissOverlays(page);
     if (A.region) {
       // State/省 下拉：优先【可见】的那个——部分收银台有多个同名 zone select，隐藏的只有占位项，
@@ -355,7 +360,7 @@ export async function fillCheckout(p) {
               await inp.click({ timeout: 4000, force: true }).catch(() => {});
             });
             await inp.fill("").catch(() => {});
-            await inp.type(String(p.card[k]), { delay: 40 });
+            await inp.type(String(p.card[k]), { delay: 22 });
             await inp.evaluate((el) => el.blur()).catch(() => {}); // 触发 Shopify 卡字段校验/格式化
             cur = (await inp.inputValue().catch(() => "")).replace(/\s/g, "");
           }
@@ -735,6 +740,8 @@ async function waitShippingReady(page) {
   // shipping_not_ready。故一并识别这类"已渲染出配送方式行"作为"已就绪/默认选中"（仅在无 radio 时启用，
   // 避免与多选项 radio 分支抢答）。
   const methodRow = page.locator('[id*="shipping_method" i],[id*="delivery_method" i]');
+  // 进入即先 blur 一次主动触发算费——越早触发运费请求，就绪越快（否则要等下方周期性 blur）。
+  await page.evaluate(() => document.activeElement && document.activeElement.blur()).catch(() => {});
   let picked = false;
   for (let i = 0; i < 150 && !picked; i++) { // 最多 ~45s 等运费率加载（配送必需，尽量等它出来）；命中即退出
     const radioCount = await radios.count().catch(() => 0);
@@ -750,14 +757,15 @@ async function waitShippingReady(page) {
       picked = true;
       break;
     }
-    // 每 ~5s 主动 blur 当前字段一次，促使 Shopify 重新拉取运费率——骨架长时间卡住常因运费请求没被触发
-    if (i > 0 && i % 16 === 0) {
+    // 每 ~2.5s 主动 blur 一次，促使 Shopify 重新拉取运费率——骨架长时间卡住常因运费请求没被触发。
+    // 早期更勤(每 8 轮≈2.5s)以尽快触发算费；命中即退出，不影响就绪即走。
+    if (i > 0 && i % 8 === 0) {
       await page.evaluate(() => document.activeElement && document.activeElement.blur()).catch(() => {});
     }
     await page.waitForTimeout(300); // 骨架加载中或该单无配送方式（数字商品/免运费）
   }
   const required = (await heading.count().catch(() => 0)) > 0; // 有运费区标题=本单需要运费方式
-  await page.waitForTimeout(500); // 短暂 settle；卡字段被清空由“提交前复检重填”兜底
+  await page.waitForTimeout(350); // 短暂 settle；卡字段被清空由“提交前复检重填”兜底
   return { picked, required };
 }
 
@@ -797,7 +805,7 @@ async function dismissOverlays(page) {
       }
     }
   }
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(200);
 }
 
 export async function extractOrder(page) {
