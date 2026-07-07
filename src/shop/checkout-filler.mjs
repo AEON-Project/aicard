@@ -92,18 +92,22 @@ export async function fillCheckout(p) {
     ],
   }, log);
   const ctx = await browser.newContext({
+    // locale 保留 en-US：这是【功能性归一】——强制收银台英文渲染，我们的填单选择器大量依赖英文文本
+    //（Continue to shipping / Shipping method / 条款关键词…）。跟随系统真实 locale 会让非英文机器上
+    // 收银台渲染成其它语言、英文选择器失配。语言信号以此为【单一真相源】：navigator.languages 与
+    // Accept-Language 均由 Playwright 按 locale 自动派生，不再手动写死（避免多处矛盾）。
     locale: "en-US",
-    timezoneId: "America/Los_Angeles", // 与收货地址(加州)一致，避免时区/地理指纹矛盾
+    // 不写死 timezoneId：收货地址是动态的，且时区应匹配【真实机器/IP 地理】而非收货地址
+    //（真人可能在 A 地下单寄 B 地）。留空用系统真实时区，指纹最自洽；写死反而制造矛盾。
     viewport: { width: 1280, height: 1600 },
     deviceScaleFactor: 2,
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
   });
   // 指纹隐身：抹掉常见 headless/自动化特征（webdriver / languages / plugins / chrome runtime / permissions / WebGL vendor）。
   // 纯"更像真人"的伪装，不涉及破解验证码；只在避免触发挑战这一层借鉴 browser-use。
   await ctx.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+    // 不覆盖 navigator.languages：由 Playwright 按 context.locale 自动设置，避免与 locale 矛盾的第二处写死
     Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] }); // 非空插件列表
     window.chrome = window.chrome || { runtime: {} }; // headless 下常缺失 window.chrome
     const origQuery = window.navigator.permissions && window.navigator.permissions.query;
