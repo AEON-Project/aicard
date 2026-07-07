@@ -91,7 +91,12 @@ export async function fillCheckout(p) {
       "--no-first-run",
     ],
   }, log);
+  // 出口代理（借鉴 hermes：住宅/轮换代理是最有效的反爬手段——IP 信誉 > 指纹）。
+  // 从 p.proxy 或环境变量读取(AICARD_PROXY / HTTPS_PROXY / ALL_PROXY)，透传给 Playwright；不设则直连。
+  const proxy = parseProxy(p.proxy || process.env.AICARD_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || process.env.ALL_PROXY);
+  if (proxy) log(`Using egress proxy ${proxy.server}${proxy.username ? " (auth)" : ""}`);
   const ctx = await browser.newContext({
+    ...(proxy ? { proxy } : {}),
     // locale 保留 en-US：这是【功能性归一】——强制收银台英文渲染，我们的填单选择器大量依赖英文文本
     //（Continue to shipping / Shipping method / 条款关键词…）。跟随系统真实 locale 会让非英文机器上
     // 收银台渲染成其它语言、英文选择器失配。语言信号以此为【单一真相源】：navigator.languages 与
@@ -208,6 +213,17 @@ export async function fillCheckout(p) {
         .catch(() => false);
     }
     if (!ready) {
+      // bot 拦截识别（借鉴 hermes/browser-use）：表单一直不出现时，若标题/页面是 Cloudflare/反爬拦截页，
+      // 归为专门的 bot_blocked（而非笼统 checkout_unavailable），给"重试/换住宅代理"可操作指引——不破解验证码。
+      const title = ((await page.title().catch(() => "")) || "");
+      const body = ((await page.locator("body").textContent().catch(() => "")) || "").slice(0, 600);
+      if (/just a moment|attention required|checking your browser|ddos protection|access denied|are you a robot|verify you are human|请稍候|安全验证|人机验证/i.test(title + " " + body)) {
+        result.outcome = "bot_blocked";
+        result.signals.botBlockTitle = title.slice(0, 80);
+        result.signals.reason = `被反爬拦截（页面："${title.slice(0, 60)}"），非破解可解的机器人防护。可尝试：稍后重试；配置住宅代理(--proxy / env HTTPS_PROXY)换出口 IP 降低被拦概率；部分商户反爬极强可能无法自动完成。`;
+        await shot("01c-bot-blocked");
+        return finish(browser, result);
+      }
       result.outcome = "checkout_unavailable";
       result.signals.reason = "收银台表单加载失败（重载后仍未出现表单，多为网络异常或链接失效）。请检查网络或用 `shop cart` 重新生成 continueUrl。";
       await shot("01b-unavailable");
@@ -988,6 +1004,21 @@ export async function extractOrder(page) {
 // （本包内 node_modules/playwright 残缺 / playwright-core 缺失），import 失败。
 // 此处失败即尝试 npm i -g playwright 修复；本包内若残留【损坏】副本会遮蔽全局解析，删之令其回退。
 // 修复完成后重试；ESM 可能缓存失败解析 → 明确提示重跑（安装已就绪，下次即可用）。
+// 解析代理 URL → Playwright proxy 配置。支持 http(s)/socks5，含可选 user:pass@。无效/空则返回 null（直连）。
+function parseProxy(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  try {
+    const u = new URL(raw.trim());
+    const server = `${u.protocol}//${u.host}`; // 含端口；协议保留 http/https/socks5
+    const proxy = { server };
+    if (u.username) proxy.username = decodeURIComponent(u.username);
+    if (u.password) proxy.password = decodeURIComponent(u.password);
+    return proxy;
+  } catch {
+    return null;
+  }
+}
+
 async function loadPlaywrightChromium(log) {
   const say = log || (() => {});
   try {
