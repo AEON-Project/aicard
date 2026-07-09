@@ -428,9 +428,11 @@ aicard shop search --query "<natural language>" [--country US] [--max-price 50] 
 
 1. Run search **with `--html`** (always include it): `aicard shop search --query "…" [--country/--max-price/…] --html /tmp/aicard-search.html`
 2. **Read that file and publish it as an Artifact.** It's self-contained (images embedded as data URIs, no external fetches) and the cards are **clickable** — clicking one sends "Buy item #N: …" back so the user can pick by clicking (if the click is a no-op in this host, the number reply still works).
-3. Prompt: "Reply with the number (or click a card) to select the product". Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
+3. Prompt: "Reply with the number (or click the card to open it) to select the product". Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
 
-**Markdown table = fallback only** — use it *only* when you genuinely cannot publish an Artifact (a plain text-only terminal, or the user explicitly asked for text). Do not default to the table when an Artifact is available.
+**When you publish the Artifact, the Artifact IS the presentation — do NOT also paste the full markdown table below it** (that's redundant and makes it look like "just a table"). Accompany the card with at most a one-line pointer + one highlight, e.g. "已生成图文卡片(点开上方 aicard-search 查看/挑选);想省钱选 #5,配置最全选 #1". Note: whether the Artifact auto-opens or shows as a collapsed card the user clicks is the **host client's behavior** (claude.ai web usually auto-opens a side panel; desktop "Code" view shows a card to click) — you cannot force it open, so tell the user to click the card to view the grid.
+
+**Markdown table = fallback only** — use the table below *only* when you genuinely cannot publish an Artifact (a plain text-only terminal, or the user explicitly asked for text). Do not default to the table when an Artifact is available, and never show both.
 
 | # | Product | Price | Merchant |
 |---|------|------|------|
