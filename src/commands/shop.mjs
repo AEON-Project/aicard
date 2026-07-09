@@ -23,13 +23,15 @@ export async function search(opts) {
       requireCard: true, // 只支持信用卡：选品阶段就剔除不收卡/无法确认收卡的商户（虚拟卡只能用于收卡店）
       sort: opts.sort,
     });
+    // 富展示产物：--html 出可点击 HTML（可作 Artifact）；--image 出 PNG（内联自动显示、零点击）。
     let htmlPath = null;
-    if (opts.html) {
-      const { renderProductsHtml } = await import("../shop/render.mjs");
+    let imagePath = null;
+    if (opts.html || opts.image) {
+      const { renderProductsHtml, renderHtmlToImage } = await import("../shop/render.mjs");
       const { writeFileSync } = await import("node:fs");
       const html = await renderProductsHtml(r.products, { title: `Results for “${opts.query}”` });
-      writeFileSync(opts.html, html);
-      htmlPath = opts.html;
+      if (opts.html) { writeFileSync(opts.html, html); htmlPath = opts.html; }
+      if (opts.image) { await renderHtmlToImage(html, opts.image, { log: (m) => logInfo("> " + m) }); imagePath = opts.image; }
     }
     emitOk("shop.search", {
       scope: r.scope,
@@ -39,7 +41,8 @@ export async function search(opts) {
       sortedBy: r.sortedBy || "relevance",
       hasNext: r.hasNext,
       cursor: r.cursor,
-      htmlPath,
+      ...(htmlPath ? { htmlPath } : {}),
+      ...(imagePath ? { imagePath } : {}),
       products: r.products,
     });
   } catch (e) {

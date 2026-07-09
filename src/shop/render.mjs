@@ -31,6 +31,32 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+/**
+ * 把自包含 HTML 片段（renderProductsHtml/renderProductHtml 的输出）用 Playwright 渲成 PNG，
+ * 供在 Claude Code / 终端等宿主里【内联自动显示、无需点击】（artifact 面板需点开是宿主行为，无法强制）。
+ * HTML 已内嵌图片(data-URI)，离线渲染，无外部请求。
+ * @param {string} html - body 片段（含内联 <style>）
+ * @param {string} pngPath - 输出 PNG 路径
+ * @param {{width?:number, log?:function}} [opts]
+ */
+export async function renderHtmlToImage(html, pngPath, { width = 1160, log } = {}) {
+  const { loadPlaywrightChromium, launchWithAutoInstall } = await import("./checkout-filler.mjs");
+  const chromium = await loadPlaywrightChromium(log);
+  const browser = await launchWithAutoInstall(chromium, { headless: true }, log);
+  try {
+    const ctx = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor: 2 });
+    const page = await ctx.newPage();
+    await page.setContent(
+      `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#fff}</style></head><body>${html}</body></html>`,
+      { waitUntil: "load" }
+    );
+    await page.screenshot({ path: pngPath, fullPage: true });
+  } finally {
+    await browser.close().catch(() => {});
+  }
+  return pngPath;
+}
+
 /** 读取本地图片文件转 data URI（大小限制）；失败返回 null。用于把收银台截图内嵌进 Artifact。 */
 export async function readImageDataUri(filePath, { maxBytes = 900_000 } = {}) {
   if (!filePath) return null;

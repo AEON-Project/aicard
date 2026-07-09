@@ -150,6 +150,7 @@ shop
   .option("--cursor <c>", "Pagination cursor")
   .option("--include-test", "Include suspected test/dev stores (by default excludes *.myshopify.com and test/demo names)", false)
   .option("--html <path>", "Also render an image product-card HTML page (self-contained) to this path")
+  .option("--image <path>", "Also render the product-card grid to a PNG (via Playwright) — display it inline for auto-visible image+text with zero clicks (no artifact panel needed)")
   .action(async (opts) => {
     const { search } = await import("../src/commands/shop.mjs");
     return search(opts);

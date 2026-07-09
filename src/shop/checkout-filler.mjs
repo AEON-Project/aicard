@@ -1054,7 +1054,7 @@ function parseProxy(raw) {
   }
 }
 
-async function loadPlaywrightChromium(log) {
+export async function loadPlaywrightChromium(log) {
   const say = log || (() => {});
   try {
     return (await import("playwright")).chromium;
@@ -1089,7 +1089,7 @@ async function loadPlaywrightChromium(log) {
 
 // 启动浏览器；若浏览器内核未下载（常见于纯发卡用户首次购物），懒加载自动下 chromium 后重试。
 // 进度输出走 stderr（fd 2），保持 stdout 的一行 JSON envelope 干净。
-async function launchWithAutoInstall(chromium, opts, log) {
+export async function launchWithAutoInstall(chromium, opts, log) {
   try {
     return await chromium.launch(opts);
   } catch (e) {
