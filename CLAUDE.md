@@ -110,6 +110,32 @@ Each command module exports a single async function. Pattern: parse options → 
 ### 5. 命令必须能自然退出
 WalletConnect 会开着 relay WebSocket + heartbeat 占住事件循环。WC 相关命令跑完后进程要能退出（`bin/cli.mjs` 用 `parseAsync().then(exit)` 兜成功路径，`emitErr` 各自 exit）；新增长驻资源时注意收尾关闭。
 
+### 6. 改动生效 ≠ git push：本地验证与发布的同步
+**改完代码 push 到 git 并不会让任何人（包括你自己的桌面端）用上。** 真正运行的是两个独立的"消费端"，改动必须同步到它们才生效：
+- **全局 `aicard` CLI**（agent 通过 shell 调用）：`npm` 全局安装的版本。git 里的 `bin/cli.mjs` 新增的命令/选项，只有在这个全局命令被更新后才可用。
+- **已装 skill**（agent 读的 `~/.claude/skills/aicard/SKILL.md` + `references/`）：与仓库里的 `skills/aicard/` 是两份拷贝。改了仓库的 SKILL.md，已装的那份不会自动变。
+
+**本地验证**（把这台机器接到本仓库最新，改动可逆）：
+```bash
+npm link                                            # 全局 aicard → 本仓库 bin/cli.mjs
+cp skills/aicard/SKILL.md ~/.claude/skills/aicard/  # 刷新已装 skill（连同 references/）
+cp -R skills/aicard/references ~/.claude/skills/aicard/
+```
+之后必须**新开一个会话**——skill 在会话触发时加载，旧会话仍用旧 skill。还原：`npm unlink -g @aeon-ai-pay/aicard && npm i -g @aeon-ai-pay/aicard@latest`，SKILL.md 用 `.bak` 覆盖回。
+
+**正式发布**（让所有用户/其它设备拿到）：
+```bash
+node scripts/release.mjs   # bump 版本 + npm publish
+```
+用户侧再 `npm update -g @aeon-ai-pay/aicard` 更新 CLI、`npx skills add AEON-Project/aicard -g -y` 从 GitHub main 拉最新 SKILL.md。
+
+**排查"改了没生效"时先自检激活版本**，不要只看仓库：
+```bash
+which aicard; aicard --version
+aicard shop --help | grep -i steps      # 新命令在不在 = 全局是不是新版
+grep -c "Live step-by-step" ~/.claude/skills/aicard/SKILL.md   # 已装 skill 是不是新版
+```
+
 ## Key Dependencies
 - `viem` — EVM client (balance queries, contract reads)
 - `@walletconnect/sign-client` — Wallet connection protocol
