@@ -53,6 +53,19 @@ export async function product(opts) {
     if (!opts.id) return emitErr("shop.product", "MISSING_ID", { message: "Missing --id (product gid, from the productId in search results)" });
     const { getProduct } = await import("../shop/catalog.mjs");
     const p = await getProduct({ id: opts.id, shopDomain: opts.shop });
+
+    let htmlPath = null;
+    if (opts.html) {
+      const { writeFileSync } = await import("node:fs");
+      const { renderProductHtml } = await import("../shop/render.mjs");
+      const html = await renderProductHtml(
+        { ...p, image: p.images?.[0], specText: p.variants[0]?.description || p.description },
+        { buyPrompt: `Buy ${p.title}` }
+      );
+      writeFileSync(opts.html, html);
+      htmlPath = opts.html;
+    }
+
     emitOk("shop.product", {
       title: p.title,
       description: p.description,
@@ -68,6 +81,7 @@ export async function product(opts) {
       variantCount: p.variants.length,
       // 每个规格组合 → variantId（供选规格后拼单）
       variants: p.variants.map((v) => ({ variantId: v.variantId, options: v.options, price: v.price, available: v.available })),
+      ...(htmlPath ? { htmlPath } : {}),
     });
   } catch (e) {
     emitErr("shop.product", e.code || "SHOP_PRODUCT_FAILED", { message: e.message });
@@ -303,6 +317,23 @@ export async function pay(opts) {
           }
         : null;
 
+    // 下单流程时间线 HTML（自包含，Artifact 直显）。【安全】渲染器只嵌无卡面截图，
+    // 填卡节点仅"已打码"占位，绝不内嵌 05-card-filled（含明文卡号/CVC）。
+    let timelineHtmlPath = null;
+    if (opts.html) {
+      try {
+        const { writeFileSync } = await import("node:fs");
+        const { renderOrderTimelineHtml } = await import("../shop/render.mjs");
+        const html = await renderOrderTimelineHtml(r, receipt, {
+          title: `Order flow — ${receipt?.merchant || (() => { try { return new URL(opts.continueUrl).host; } catch { return "checkout"; } })()}`,
+        });
+        writeFileSync(opts.html, html);
+        timelineHtmlPath = opts.html;
+      } catch (e) {
+        logInfo(`> Timeline render failed (non-fatal): ${e.message}`);
+      }
+    }
+
     // 卡面绝不进 envelope，只回末 4 位与结果
     emitOk("shop.pay", {
       cardSource,
@@ -313,6 +344,7 @@ export async function pay(opts) {
       ...(receipt ? { receipt } : {}),
       order: r.order,
       artifacts: r.artifacts,
+      ...(timelineHtmlPath ? { timelineHtmlPath } : {}),
       signals: r.signals,
       ...(suggestion ? { suggestion } : {}),
     });

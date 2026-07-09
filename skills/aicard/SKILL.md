@@ -433,17 +433,19 @@ aicard shop search --query "<natural language>" [--country US] [--max-price 50] 
 
 Then prompt: "Reply with the number to select the product you want to buy". Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
 
-(Optional rich display: add `--html <path>` to generate an image-and-text card page, opened with Artifact or a browser — use only when the user explicitly wants to see product images.)
+**Rich visual (recommended in Artifact-capable clients — Claude Desktop / web):** add `--html <path>`; the CLI writes a self-contained image-and-text product-card grid (images embedded, no external fetches). **Publish that file as an Artifact** so the user browses products visually. The cards are **clickable** — clicking one sends "Buy item #N: …" back to the conversation, so the user can pick by clicking instead of typing a number (non-Artifact clients just ignore the click; the number reply still works). Fall back to the markdown table when the client can't render Artifacts. See [Rich Visual Presentation](#rich-visual-presentation-artifacts).
 
 ### 5.1b Product detail & pick options (after selecting a product, don't go straight to the cart)
 
 Fetch full details and show a **detail view**:
 
 ```bash
-aicard shop product --id <productId>
+aicard shop product --id <productId> [--html <path>]
 # ⚠️ Use the Global endpoint for Global search results (do not add --shop, otherwise gid://shopify/p/… will mismatch the storefront id and error out).
 # Only when the previous step was a single-store search `shop search --shop <domain>` should you also add --shop <domain> here.
 ```
+
+**Rich visual (recommended in Artifact-capable clients):** add `--html <path>` to write a self-contained product-detail card (large image + price + spec table); **publish it as an Artifact**. The card is clickable — clicking it sends "Buy …" back to confirm.
 
 Present (consumer-facing detail, not a bare dump):
 - Title + price + a one-line selling point (from `specText`)
@@ -502,8 +504,10 @@ aicard shop pay \
   --continue-url "<continueUrl>" --amount <total> \
   --email <email> --first <First> --last <Last> \
   --address1 "<street>" --city "<City>" --zip <zip> --country "<Country>" \
-  [--phone <phone>] [--region "<State>"]
+  [--phone <phone>] [--region "<State>"] [--html <path>]
 ```
+
+**Rich visual (recommended in Artifact-capable clients):** add `--html <path>` — after the run the CLI writes a self-contained **order-flow timeline** (order summary with merchant / item / amount charged / `VISA •••• {last4}` / ship-to, plus a step-by-step screenshot strip). **Publish it as an Artifact.** 🔒 **Security is enforced by the renderer**: it embeds only non-card screenshots (open → address → shipping → thank-you); the **card-entry step is a "masked" placeholder — the raw card-entry screenshot (which shows the full PAN/CVC) is never embedded**. Never paste a card-entry screenshot into the chat yourself.
 
 - **The first purchase auto-downloads the browser engine**: `shop pay` depends on Playwright chromium (~150MB). When it detects it isn't downloaded, it **downloads it automatically and continues** (progress goes to stderr, first time only, reused thereafter); the first run therefore taking an extra minute or two is normal, not a hang. If the auto-download fails it returns `BROWSER_INSTALL_FAILED` — relay to the user to run `npx playwright install chromium` manually.
 - **If it returns `PLAYWRIGHT_MISSING`** (the playwright JS package itself isn't installed, usually because the optionalDependency silently failed during a global install): relay to the user to run once `npm i -g playwright && npx playwright install chromium`, then retry `shop pay`.
@@ -588,6 +592,22 @@ aicard shop track --order <orderId> [--bearer <JWT>]
 ```
 
 Requires a Token-tier credential (`read_global_api_orders`). **⚠️ Can only query orders completed via the pure-API `complete_checkout`** — orders from the current browser card-fill path (`shop pay`) **cannot be found** (`orderNumber` is a merchant confirmation number, not a Global ID). For browser-path orders, always rely on the `receipt` from 5.4 (confirmation number + local proof image + confirmation email); do not attempt `shop track`.
+
+### Rich Visual Presentation (Artifacts)
+
+In **Artifact-capable clients (Claude Desktop / web)**, make the shopping flow visual and intuitive — at each stage the CLI produces a self-contained HTML page you **publish as an Artifact**. This is the recommended default there; fall back to markdown tables/text when the client can't render Artifacts.
+
+| Stage | Command | What it renders |
+|------|--------|-----------------|
+| Search | `shop search … --html <path>` | Clickable product-card grid (click a card → sends "Buy item #N" back) |
+| Detail | `shop product --id … --html <path>` | Product-detail card (large image + price + spec table; clickable to buy) |
+| Order | `shop pay … --html <path>` | Order-flow timeline: summary (merchant / item / amount / `•••• last4` / ship-to) + step screenshots |
+
+Rules:
+1. **Publish, don't paste** — read the generated file and render it as an Artifact (it's fully self-contained: images embedded as data URIs, no external fetches, so it displays under the Artifact CSP). Keep one Artifact per stage; reuse/redeploy rather than spawning many.
+2. **Clickable cards need a client that can send prompts back** (Claude Desktop). Elsewhere the click is a no-op and the user picks by replying a number — always keep that textual path working.
+3. 🔒 **Card safety is non-negotiable.** The order timeline renderer embeds only non-card screenshots and shows the card-entry step as a **masked placeholder** — the raw card-entry screenshot (full PAN/CVC visible) is **never** embedded. Never paste a card-entry screenshot, full card number, or CVC into the chat or an Artifact yourself. Only the last 4 digits may be shown.
+4. **Optional, not required** — if the user is on a plain terminal client or explicitly prefers text, skip the Artifacts; the table/text flow is always valid.
 
 ---
 

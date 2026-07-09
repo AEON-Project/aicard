@@ -160,6 +160,7 @@ shop
   .description("Get full product details (specs, colors, sizes) for a search result")
   .requiredOption("--id <gid>", "Product id (productId from search)")
   .option("--shop <domain>", "Merchant domain (Storefront); omit for Global Catalog")
+  .option("--html <path>", "Also render a self-contained product-detail HTML page (image + specs) to this path")
   .action(async (opts) => {
     const { product } = await import("../src/commands/shop.mjs");
     return product(opts);
@@ -204,6 +205,7 @@ shop
   .option("--wait-otp <ms>", "On 3DS/captcha, wait for OTP relay file up to N ms")
   .option("--otp-file <path>", "OTP relay file path (default /tmp/aicard-otp.txt)")
   .option("--out <dir>", "Screenshot output dir (default ./artifacts)")
+  .option("--html <path>", "Also render a self-contained order-flow timeline HTML page to this path (card-entry step masked, never embeds card PII)")
   .action(async (opts) => {
     const { pay } = await import("../src/commands/shop.mjs");
     return pay(opts);
