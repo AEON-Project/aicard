@@ -7,9 +7,14 @@ import { bsc } from "viem/chains";
 import { loadConfig } from "../config.mjs";
 import { getBalanceByAddress } from "../balance.mjs";
 import { BSC_RPC_URL, USDT_BSC, ERC20_TRANSFER_ABI, GAS_PRICE_BUFFER } from "../constants.mjs";
+import { WalletConnectError } from "../walletconnect.mjs";
+import { inlineWalletConnectTopup } from "../wc-topup.mjs";
 import { emitOk, emitErr, logInfo } from "../output.mjs";
 
 const BNB_TRANSFER_GAS = 21000n;
+// USDT(BEP20) transfer 的保守 gas 上限（实测 ~35-65k），仅用于"BNB 是否够付本次 gas"的判断，
+// 宁可略高估、触发补足，也不放过"BNB 非零但不够"的边界（否则会硬闯并在链上失败）。
+const USDT_TRANSFER_GAS = 100000n;
 
 export async function withdraw(opts) {
   logInfo("Reclaiming funds...");
@@ -62,16 +67,6 @@ export async function withdraw(opts) {
 
   // 1. 赎回 USDT（有 USDT 才执行）
   if (balance.usdtRaw > 0n) {
-    // USDT 转账需要 BNB 作 gas
-    if (balance.bnbRaw === 0n) {
-      emitErr("withdraw", "INSUFFICIENT_BNB", {
-        message: "No BNB for gas. Withdraw is a normal on-chain transfer and requires BNB to pay gas.",
-        address: sessionAddress,
-        hint: "Run 'aicard gas' to top up BNB via WalletConnect, then retry.",
-      });
-      return;
-    }
-
     let withdrawAmount = balance.usdtRaw;
     if (opts.amount) {
       const requested = parseUnits(opts.amount, 18);
@@ -86,17 +81,44 @@ export async function withdraw(opts) {
       withdrawAmount = requested;
     }
 
-    try {
-      const data = encodeFunctionData({
-        abi: ERC20_TRANSFER_ABI,
-        functionName: "transfer",
-        args: [mainWallet, withdrawAmount],
-      });
+    const data = encodeFunctionData({
+      abi: ERC20_TRANSFER_ABI,
+      functionName: "transfer",
+      args: [mainWallet, withdrawAmount],
+    });
 
+    // 显式设 legacy gasPrice：不设则 viem 走 EIP-1559，本 RPC（QuickNode 私有交易节点）会把费率估成 0，
+    // 交易被拒（require GasPrice=50000000）。动态取链上 gasPrice 再上浮 20%，构造 legacy 交易。
+    const gasPrice = (await publicClient.getGasPrice()) * GAS_PRICE_BUFFER / 100n;
+
+    // USDT 转账需要 BNB 作 gas。判据用"是否够付本次 gas"（USDT_TRANSFER_GAS × gasPrice），
+    // 而非仅判 ===0，堵住"BNB 非零但不够"的边界。不足时内联 WalletConnect 补一点 BNB，
+    // 只在不足时触发，补完当场继续赎回——无需用户再手动跑 `aicard gas` 分两步。
+    const neededBnb = USDT_TRANSFER_GAS * gasPrice;
+    if (balance.bnbRaw < neededBnb) {
+      logInfo(`\nBNB insufficient for gas (have ${balance.bnb}, need ~${formatUnits(neededBnb, 18)}); funding a little BNB via WalletConnect...`);
+      try {
+        await inlineWalletConnectTopup({ sessionAddress, amount: null, needGas: true });
+      } catch (e) {
+        if (e instanceof WalletConnectError) {
+          emitErr("withdraw", e.code, { message: e.message });
+        } else {
+          emitErr("withdraw", "GAS_FUNDING_FAILED", { message: `Failed to fund BNB for gas: ${e.message}` });
+        }
+        return;
+      }
+      const fresh = await getBalanceByAddress(sessionAddress);
+      if (fresh.bnbRaw < neededBnb) {
+        emitErr("withdraw", "INSUFFICIENT_BNB", {
+          message: `Still insufficient BNB after funding (have ${fresh.bnb}, need ~${formatUnits(neededBnb, 18)}).`,
+          address: sessionAddress,
+        });
+        return;
+      }
+    }
+
+    try {
       logInfo(`\nTransferring ${formatUnits(withdrawAmount, 18)} USDT → ${mainWallet}...`);
-      // 显式设 legacy gasPrice：不设则 viem 走 EIP-1559，本 RPC（QuickNode 私有交易节点）会把费率估成 0，
-      // 交易被拒（require GasPrice=50000000）。动态取链上 gasPrice 再上浮 20%，构造 legacy 交易。
-      const gasPrice = (await publicClient.getGasPrice()) * GAS_PRICE_BUFFER / 100n;
       usdtTxHash = await walletClient.sendTransaction({ to: USDT_BSC, data, gasPrice });
       logInfo(`USDT tx: ${usdtTxHash}`);
 
