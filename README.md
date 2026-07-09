@@ -1,8 +1,8 @@
 # aicard
 
-An Agent skill for purchasing virtual debit cards via the [x402 protocol](https://www.x402.org/).
+An agent skill for creating instant, one-time-use virtual Visa/Mastercard cards your agent can **pay with online** — top up with crypto, then spend at real merchants.
 
-Pay with cryptocurrency (USDT on BSC) to get instant-use virtual Visa/Mastercard.
+**Shop & pay across the Shopify merchant network** — search a product, build a cart, and check out end-to-end, with real orders shipped to your address. The card also works anywhere Visa/Mastercard is accepted online.
 
 ## Install Skill
 
@@ -16,7 +16,7 @@ npx skills add AEON-Project/aicard -a claude-code -a cursor -a codex -g -y
 
 Supported agents: Claude Code, Cursor, Codex, OpenClaw, Gemini CLI, GitHub Copilot, Windsurf, Roo Code, and [39+ more](https://agentskills.io).
 
-> ℹ️ 安装时若看到 `Failed to install 1: PromptScript`——这是 **PromptScript 平台不支持全局 skill 安装**的自身限制，属正常跳过，**不影响** Claude Code / Cursor / Codex 等主流工具。只想装指定工具时改用上面的 `-a` 形式即可。
+> ℹ️ If you see `Failed to install 1: PromptScript` during install, that's a limitation of the **PromptScript platform not supporting global skill installs** — it's safely skipped and does **not** affect Claude Code / Cursor / Codex and other mainstream tools. To install only specific tools, use the `-a` form shown above.
 
 ## CLI Commands
 

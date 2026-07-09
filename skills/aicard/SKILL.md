@@ -417,42 +417,42 @@ Ask what they want if unstated, then:
 ```bash
 aicard shop search --query "<natural language>" [--country US] [--max-price 50] [--limit 5]
 # single store only: add --shop <domain>
-# 要最便宜：加 --sort price（结果按价格升序，products[0] 即最便宜）
+# for the cheapest: add --sort price (results sorted by ascending price, products[0] is the cheapest)
 ```
 
-> 💳 **只支持信用卡**：`shop search` 返回的商户都能用信用卡付款，直接选即可，无需关心支付方式。
+> 💳 **Credit card only**: all merchants returned by `shop search` accept credit card payments, so just pick one — no need to worry about payment methods.
 
-> 💰 **想买最便宜**：`--sort price` 让结果按价格升序返回（`data.sortedBy:"price"`），取 `products[0]`。注意它排的是**本次返回结果内**的最便宜（Shopify 按相关性给的前 N 条），非全网绝对最低；想扩大候选池就加大 `--limit`（如 30）或配合 `--max-price`。
+> 💰 **Want the cheapest**: `--sort price` returns results sorted by ascending price (`data.sortedBy:"price"`); take `products[0]`. Note it ranks the cheapest **within the current result set** (the top N Shopify returns by relevance), not the absolute lowest across the entire web; to widen the candidate pool, increase `--limit` (e.g. 30) or combine it with `--max-price`.
 
 **Present results as a markdown table** (renders cleanly in the client, good density):
 
-| # | 商品 | 价格 | 商户 |
+| # | Product | Price | Merchant |
 |---|------|------|------|
 | 1 | {title} | ${priceMin} | {merchantName or merchantDomain} |
 | 2 | … | … | … |
 
-Then prompt: 「回复序号选择要购买的商品」。Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
+Then prompt: "Reply with the number to select the product you want to buy". Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
 
-（可选富展示：加 `--html <path>` 生成图文卡片页，用 Artifact 或浏览器打开——仅当用户明确想看商品图时使用。）
+(Optional rich display: add `--html <path>` to generate an image-and-text card page, opened with Artifact or a browser — use only when the user explicitly wants to see product images.)
 
-### 5.1b Product detail & pick options（选中商品后，别直接进购物车）
+### 5.1b Product detail & pick options (after selecting a product, don't go straight to the cart)
 
 Fetch full details and show a **detail view**:
 
 ```bash
 aicard shop product --id <productId>
-# ⚠️ Global 搜索的结果用 Global 端点（不要加 --shop，否则 gid://shopify/p/… 会和 storefront id 不匹配而报错）。
-# 仅当上一步是单店搜索 `shop search --shop <domain>` 时，这里才同样加 --shop <domain>。
+# ⚠️ Use the Global endpoint for Global search results (do not add --shop, otherwise gid://shopify/p/… will mismatch the storefront id and error out).
+# Only when the previous step was a single-store search `shop search --shop <domain>` should you also add --shop <domain> here.
 ```
 
-Present (C-end detail, not a bare dump):
-- 标题 + 价格 + 一句话卖点（取自 `specText`）
-- **规格表**：把 `options`（如 颜色/尺码）列成表格
-- 关键参数：从 `specText` 提炼材质/克重/产地等
+Present (consumer-facing detail, not a bare dump):
+- Title + price + a one-line selling point (from `specText`)
+- **Spec table**: lay out `options` (e.g. color/size) as a table
+- Key parameters: extract material/weight/origin, etc. from `specText`
 
 Then:
-- If `options` is non-empty → ask the user to pick, e.g. 「颜色+尺码，如 Black L」（冰箱则是「容量+能效」等，视 `options` 而定）. Map the choice to a `variantId` by matching `variants[].options`.
-- **Fallback (important)**: UCP 常只返回默认 variant，若所选组合不在 `variants[]` 里，用默认 variant 的 id 继续，并提示用户「已按默认规格下单，可在收银台核对/调整规格」。**绝不因选不到精确 variant 而卡住流程。**
+- If `options` is non-empty → ask the user to pick, e.g. "color+size, such as Black L" (for a fridge it would be "capacity+energy rating", etc., depending on `options`). Map the choice to a `variantId` by matching `variants[].options`.
+- **Fallback (important)**: UCP often returns only the default variant; if the chosen combination is not in `variants[]`, continue with the default variant's id and tell the user "the order was placed with the default spec; you can review/adjust the spec at checkout". **Never let the flow stall just because an exact variant cannot be matched.**
 - Proceed to `shop cart` with the chosen `variantId` + `merchantDomain`.
 
 ### 5.2 Build cart & show the real total
@@ -465,22 +465,22 @@ First collect ship-to **country + postal code** (affects tax/shipping):
 aicard shop cart --shop <merchantDomain> --variant <variantId> [--qty 1] --country US --zip 10001
 ```
 
-> ⚠️ **测试店检测（重要）**：`cart` 返回里若 `testBackend:true`，说明该商户收银台**后端是测试店**（如 `twinoakstest.myshopify.com`）——有些商户用自定义域名（如 `naturallife.com`）套在测试店上，光看域名看不出来，只有 `continueUrl` 的后端 host 才暴露。**这种下单不是真实交易**。`shop pay` 遇到会返回 `TEST_STORE_BLOCKED`（这是**确认门、不是死路**，`needsConfirm:true`）。正确做法：**提示用户"该商户是测试店，下单非真实交易"并询问是否继续**；用户回复"继续"就加 `--allow-test` 重跑往下走；用户想换商户则换。不要擅自 `--allow-test`，也不要直接放弃。
+> ⚠️ **Test-store detection (important)**: if the `cart` response has `testBackend:true`, the merchant's checkout **backend is a test store** (e.g. `twinoakstest.myshopify.com`) — some merchants layer a custom domain (e.g. `naturallife.com`) over a test store, which you can't tell from the domain alone; only the backend host in `continueUrl` reveals it. **Placing such an order is not a real transaction.** When `shop pay` hits this it returns `TEST_STORE_BLOCKED` (this is a **confirmation gate, not a dead end**, `needsConfirm:true`). The correct approach: **tell the user "this merchant is a test store, the order is not a real transaction" and ask whether to continue**; if the user replies "continue", add `--allow-test` and re-run to proceed; if the user wants a different merchant, switch. Do not add `--allow-test` on your own, and do not just give up.
 
-Show the breakdown, then **先查缓存卡再给确认话术**（`aicard shop cards`，找 `used:false && amount ≥ total` 的卡），据此二选一：
+Show the breakdown, then **check for a cached card before giving the confirmation prompt** (`aicard shop cards`, looking for a card with `used:false && amount ≥ total`), and choose one of the two based on that:
 
-命中缓存卡（应优先，不开新卡、不动钱包）：
+Cached card matched (should be preferred; no new card, no wallet activity):
 ```
-{title} ×{qty}   合计 ${total} {currency}（税/运费收银台结算）
-将用【已有虚拟卡 •••• {last4}（面额 ${amount}）】支付本单 —— 无需开新卡、不动用钱包。真实扣款，确认下单？(yes/no)
+{title} ×{qty}   Total ${total} {currency} (tax/shipping settled at checkout)
+This order will be paid with [existing virtual card •••• {last4} (face value ${amount})] — no new card, no wallet activity. Real charge, confirm the order? (yes/no)
 ```
-无可用缓存卡（才开新卡，需钱包 USDT）：
+No usable cached card (only then issue a new card, requires wallet USDT):
 ```
-{title} ×{qty}   合计 ${total} {currency}（税/运费收银台结算）
-将【开一张 ${total} 的新虚拟卡】（从钱包扣 USDT）支付本单。真实扣款，确认下单？(yes/no)
+{title} ×{qty}   Total ${total} {currency} (tax/shipping settled at checkout)
+This order will be paid by [issuing a new ${total} virtual card] (USDT deducted from wallet). Real charge, confirm the order? (yes/no)
 ```
 
-> ⚠️ 不要在有可用缓存卡时说"开一张新卡"——那与 `shop pay` 实际行为（命中缓存卡 `cardSource:cache`）不符，会误导用户。
+> ⚠️ Do not say "issue a new card" when a usable cached card exists — that contradicts `shop pay`'s actual behavior (cached card matched, `cardSource:cache`) and would mislead the user.
 
 Record `continueUrl` and `total`.
 
@@ -494,10 +494,10 @@ Checkout needs the delivery address. Collect once:
 
 ⚠️ **Real charge**: issues a real virtual card from the user's wallet and submits a real order. Only run after explicit confirmation.
 
-> 💳 **支付方式无需 agent 关心**：只支持信用卡，能进到 `shop pay` 的商户都能刷卡。极个别不收卡的会返回 `card_not_supported`（**未扣款**），换商户即可。
+> 💳 **The agent need not worry about payment methods**: credit card only, and any merchant that reaches `shop pay` accepts cards. The very rare ones that don't take cards return `card_not_supported` (**no charge**) — just switch merchants.
 
 ```bash
-# 无需任何浏览器/超时参数：代码默认 headless（后台不弹窗）、默认不阻塞
+# No browser/timeout parameters needed: the code defaults to headless (no window in the background) and non-blocking by default
 aicard shop pay \
   --continue-url "<continueUrl>" --amount <total> \
   --email <email> --first <First> --last <Last> \
@@ -505,25 +505,25 @@ aicard shop pay \
   [--phone <phone>] [--region "<State>"]
 ```
 
-- **首次购物会自动下载浏览器内核**：`shop pay` 依赖 Playwright chromium（约 150MB）。检测到未下载时会**自动下载后继续**（进度打到 stderr，仅首次、后续复用）；首次因此会多花一两分钟属正常，不是卡死。若自动下载失败会返回 `BROWSER_INSTALL_FAILED`，转达用户手动运行 `npx playwright install chromium`。
-- **若返回 `PLAYWRIGHT_MISSING`**（playwright JS 包本身未装，多因全局安装时 optionalDependency 静默失败）：转达用户手动运行一次 `npm i -g playwright && npx playwright install chromium`，之后重试 `shop pay` 即可。
-- Envelope returns `cardSource` (`cache`|`new`), `outcome`, `cardLast4`, `order` — **never a full card number**。headless 运行、不弹窗。
-- **默认：前台同步跑 `shop pay`（不带 `--wait-otp`），~30s 直接拿结果**：
+- **The first purchase auto-downloads the browser engine**: `shop pay` depends on Playwright chromium (~150MB). When it detects it isn't downloaded, it **downloads it automatically and continues** (progress goes to stderr, first time only, reused thereafter); the first run therefore taking an extra minute or two is normal, not a hang. If the auto-download fails it returns `BROWSER_INSTALL_FAILED` — relay to the user to run `npx playwright install chromium` manually.
+- **If it returns `PLAYWRIGHT_MISSING`** (the playwright JS package itself isn't installed, usually because the optionalDependency silently failed during a global install): relay to the user to run once `npm i -g playwright && npx playwright install chromium`, then retry `shop pay`.
+- Envelope returns `cardSource` (`cache`|`new`), `outcome`, `cardLast4`, `order` — **never a full card number**. Runs headless, no window.
+- **Default: run `shop pay` in the foreground synchronously (without `--wait-otp`), getting the result directly in ~30s**:
   ```bash
-  aicard shop pay --continue-url "..." --amount ... <收货参数>
+  aicard shop pay --continue-url "..." --amount ... <shipping parameters>
   ```
-  - 绝大多数 3DS 是 frictionless（无感）：脚本已内置“等它自动通过”，直接返回 `success`。这是常态、一步到位。
-  - 只有**真需要验证码**的 3DS（少见）才返回 `outcome: challenge_3ds`。此时**验证未完成 = 未授权 = 未扣款**（abandoned 3DS 不产生扣款）。
-- **仅当返回 `challenge_3ds` 时，才用一次后台 `--wait-otp` 会话式补完**（不是盲目重试）：
+  - The vast majority of 3DS is frictionless (invisible): the script has "wait for it to pass automatically" built in and returns `success` directly. This is the norm, done in one step.
+  - Only 3DS that **truly requires a verification code** (rare) returns `outcome: challenge_3ds`. In this case **verification not completed = not authorized = not charged** (abandoned 3DS incurs no charge).
+- **Only when it returns `challenge_3ds` should you use a single background `--wait-otp` session to complete it** (not blind retrying):
   ```bash
-  # run_in_background；otp 文件默认 /tmp/aicard-otp.txt
-  aicard shop pay --wait-otp 600000 --continue-url "..." --amount ... <收货参数>
+  # run_in_background; otp file defaults to /tmp/aicard-otp.txt
+  aicard shop pay --wait-otp 600000 --continue-url "..." --amount ... <shipping parameters>
   ```
-  - 脚本自动点「下一步/发送」触发发码 → 提示“请把验证码给我” → 你向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 自动回填提交。验证码发到卡绑定邮箱/手机。
-  - ⚠️ 查进度别用 `sleep N; tail/cat`（会被 harness 拦）；用 `run_in_background` + 直接读输出文件或 Monitor 监听 `验证码`/`outcome`。
-  - `--assist`（弹窗人工完成）只在会话式 OTP 也走不通时才用。
-- 🚫 **绝不因 `challenge_3ds` 反复用不带 --wait-otp 重跑**——补完 3DS 只用**一次** `--wait-otp`。`pending`/`error`（点过 Pay、结果不明）则一律不重跑、先核实（见下方防重复扣款铁律）。
-- 🏷️ **付款进度如实显示,别用"Creating Agent Card"**：`shop pay` 命中缓存卡时**不创建卡、不动钱包**（CLI 日志是 `> 命中本地缓存卡 •••• {last4}…付款`）。展示进度请如实说「用缓存卡 •••• {last4} 付款中…」；仅当 `cardSource:"new"`（确无可用卡、从钱包发新卡）才说「开新卡付款中」。「Creating Agent Card…」是 `create` 命令的文案，**付款阶段不要显示**。
+  - The script auto-clicks "Next/Send" to trigger the code → prompts "please give me the verification code" → you ask the user for the code → `echo "<code>" > /tmp/aicard-otp.txt` submits it automatically. The verification code is sent to the card's bound email/phone.
+  - ⚠️ Don't use `sleep N; tail/cat` to check progress (it gets blocked by the harness); use `run_in_background` + directly read the output file, or Monitor watching for `waiting for the code`/`outcome`.
+  - `--assist` (finish manually in a popup window) is only used when even the session-based OTP doesn't work.
+- 🚫 **Never re-run repeatedly without --wait-otp because of `challenge_3ds`** — completing 3DS uses `--wait-otp` **only once**. For `pending`/`error` (Pay was clicked, result unknown), never re-run at all; verify first (see the anti-double-charge rule below).
+- 🏷️ **Show payment progress truthfully, don't use "Creating Agent Card"**: when `shop pay` matches a cached card it **does not create a card or touch the wallet** (the CLI log is `> Using cached card •••• {last4} …paying`). Show progress truthfully as "paying with cached card •••• {last4}…"; only when `cardSource:"new"` (confirmed no usable card, issuing a new card from the wallet) should you say "paying by issuing a new card". "Creating Agent Card…" is the copy for the `create` command — **do not show it during the payment phase**.
 
 **Card selection is automatic (no wallet needed if a card exists)**:
 1. `pay` first reuses a **cached card** whose face value ≥ order total → skips the wallet entirely.
@@ -532,54 +532,54 @@ aicard shop pay \
 
 Use `aicard shop cards` to list cached cards (masked last-4 only).
 
-> 🚫 **防重复扣款铁律（最高优先级）**：agent **绝不盲目重跑付款**。分两类：
-> - **`pending` / `error`（`paySubmitted:true`、结果真不明）**：**款可能已扣**，**绝对禁止重跑** `shop pay`。先核实是否成交（收货邮箱确认邮件 / `~/.aicard/receipts` 凭证图 / 商户订单），再由用户决定。
-> - **`challenge_3ds` / `challenge_captcha`（验证未完成 = 未授权 = 未扣款）**：这是**唯一**可"补完"的情形——用**一次**后台 `--wait-otp` 会话式回填验证码即可（见上）。**只补一次**，别反复重跑。
-> - 其余"点 Pay 之前"的失败（`shipping_not_ready`/`checkout_unavailable`/`fill_failed`/`no_card_iframe`/`address_incomplete`，`paySubmitted:false`，均未扣款）：只报告，是否再来一单由用户决定，agent 不自动重跑。
+> 🚫 **Anti-double-charge rule (highest priority)**: the agent **never blindly re-runs payment**. Two categories:
+> - **`pending` / `error` (`paySubmitted:true`, result genuinely unknown)**: **the charge may already have gone through**, **absolutely never re-run** `shop pay`. First verify whether the order went through (confirmation email in the shipping inbox / proof image in `~/.aicard/receipts` / merchant order), then let the user decide.
+> - **`challenge_3ds` / `challenge_captcha` (verification not completed = not authorized = not charged)**: this is the **only** case that can be "completed" — use a single background `--wait-otp` session to fill in the verification code (see above). **Complete it only once**, don't re-run repeatedly.
+> - All other "before clicking Pay" failures (`shipping_not_ready`/`checkout_unavailable`/`fill_failed`/`no_card_iframe`/`address_incomplete`, `paySubmitted:false`, all uncharged): just report; whether to place another order is the user's decision, the agent does not auto re-run.
 
 | `outcome` | Meaning | Next |
 | --- | --- | --- |
-| `success` | 已下单成交 | 展示 `receipt`（见下模板）；**不展示** `proofImage` 本地路径（仅用户索取凭证时再给） |
-| `challenge_3ds` / `challenge_captcha` | 需用户验证码（**验证未完成=未扣款**） | 用**一次**后台 `--wait-otp` 补完：脚本自动发码 → 向用户要码 → `echo "<code>" > /tmp/aicard-otp.txt` 回填。别反复重跑 |
-| `pending` / `error` | 已点 Pay、结果不明（`paySubmitted:true`） | ⚠️ **款可能已扣，禁止重跑**。先核实(邮件/凭证图/商户订单)再由用户决定 |
-| `declined` | 卡被拒（**未扣款**） | 展示 `signals.formError`；报告后由用户决定是否换卡再发起 |
-| `card_not_supported` | 该商户不收信用卡（**未扣款**） | 换一家收信用卡的商户即可 |
-| `shipping_not_ready` | 配送方式始终未加载（**未扣款、未下单**） | 报告；是否稍后重发由用户决定 |
-| `fill_failed` / `no_card_iframe` | 填单未完成、未提交（**未扣款**） | 报告；由用户决定用 `--assist` 手动完成或重发 |
-| `address_incomplete` | 国家/州没选中或缺字段（**未扣款**） | 看 `signals.reason`；报告后由用户补 `--region` 等再手动发起 |
+| `success` | Order placed and completed | Show `receipt` (template below); **do not show** the `proofImage` local path (only provide it when the user asks for the receipt) |
+| `challenge_3ds` / `challenge_captcha` | User verification code needed (**verification not completed = not charged**) | Complete with a single background `--wait-otp`: script auto-sends the code → ask the user for the code → `echo "<code>" > /tmp/aicard-otp.txt` to fill it in. Don't re-run repeatedly |
+| `pending` / `error` | Pay was clicked, result unknown (`paySubmitted:true`) | ⚠️ **The charge may have gone through, do not re-run**. First verify (email/proof image/merchant order), then let the user decide |
+| `declined` | Card declined (**not charged**) | Show `signals.formError`; after reporting, let the user decide whether to switch cards and retry |
+| `card_not_supported` | This merchant does not accept credit cards (**not charged**) | Just switch to a merchant that accepts credit cards |
+| `shipping_not_ready` | Shipping method never loaded (**not charged, no order placed**) | Report; whether to resend later is the user's decision |
+| `fill_failed` / `no_card_iframe` | Form fill not completed, not submitted (**not charged**) | Report; let the user decide to complete manually with `--assist` or resend |
+| `address_incomplete` | Country/state not selected or field missing (**not charged**) | Check `signals.reason`; after reporting, have the user supply `--region` etc. and then retry manually |
 
-**成功回执 `envelope.data.receipt`**（浏览器路径 web 订单）——**务必按下面模板完整展示,不要漏字段(尤其邮箱/金额明细)**：
+**Success receipt `envelope.data.receipt`** (web order via the browser path) — **be sure to display it in full per the template below; don't drop fields (especially email/amount breakdown)**:
 
 ```
-✅ 订单确认
-- 商户确认号：{orderNumber}（{merchant}）
-- 商品：{items 每行}
-- 明细：商品 {subtotal} + 运费 {shippingFee} + 税 {tax} = {total}（卡实扣 {amountCharged}）
-- 支付：{payment.scheme} •••• {payment.last4}（{payment.note}）
-- 配送：{shippingMethod} → {shipTo.name}，{shipTo.address}
-- 邮箱：{shipTo.email}（订单/物流确认邮件发到这里）
+✅ Order confirmed
+- Merchant confirmation number: {orderNumber} ({merchant})
+- Items: {items, one per line}
+- Breakdown: items {subtotal} + shipping {shippingFee} + tax {tax} = {total} (actual card charge {amountCharged})
+- Payment: {payment.scheme} •••• {payment.last4} ({payment.note})
+- Shipping: {shippingMethod} → {shipTo.name}, {shipTo.address}
+- Email: {shipTo.email} (order/shipping confirmation emails are sent here)
 ```
-> 不要把 `receipt.proofImage` 的本地绝对路径展示给用户（`/Users/…/.aicard/receipts/…` 是 CLI 内部存储、会困扰用户）。凭证图仍会落盘留档，仅在用户**主动索取凭证**时再给路径。
+> Do not show the user the local absolute path of `receipt.proofImage` (`/Users/…/.aicard/receipts/…` is CLI-internal storage and would confuse the user). The proof image is still saved to disk for the record; only provide the path when the user **actively asks for the receipt**.
 
-要点：
-- `orderNumber`（如 `X0FCMYJAT`）是**商户确认号**，不是 Shopify API Global ID，**不能用 `shop track`/`get_order` 查询**。
-- **金额以 `amountCharged` 为准**——优先感谢页最终 `total`（含运费+税，`amountSource:"checkout_total"`）；抓不到才回退 `--amount`（仅商品价，`amountSource:"cli_amount_fallback"`，可能偏小，需提示用户以卡账单为准）。运费/税是收银台结算时才加的，**`--amount` 不等于实扣额**。
-- `shipTo.email` **必须展示**——这是订单/物流确认邮件的接收地址。
-- `proofImage` = 本地持久付款凭证图 `~/.aicard/receipts/receipt-<确认号>-<ts>.png`（感谢页截图，无完整卡面）。**默认不展示这个本地路径**（会困扰用户）；仅用户主动要凭证时再给。
-- **二次查看订单**（原感谢页链接 `orderUrl` 会话绑定、不可重开——实测新浏览器打开会被弹回首页要求登录，`orderUrlDurable:false`）。引导用户走 `receipt.reopenVia`：
-  - 收货邮箱里商户确认邮件的 *View your order* 链接（持久可打开）
-  - 感谢页的 *Download to track with Shop*（需 Shop 账号）
-  - 本地 `proofImage` 凭证图（离线留档）
+Key points:
+- `orderNumber` (e.g. `X0FCMYJAT`) is the **merchant confirmation number**, not a Shopify API Global ID, and **cannot be queried with `shop track`/`get_order`**.
+- **The amount is authoritative from `amountCharged`** — prefer the final `total` on the thank-you page (incl. shipping+tax, `amountSource:"checkout_total"`); only fall back to `--amount` if it can't be captured (product price only, `amountSource:"cli_amount_fallback"`, may be too low, so tell the user to rely on the card statement). Shipping/tax are only added at checkout settlement, so **`--amount` is not the actual charged amount**.
+- `shipTo.email` **must be shown** — this is the address that receives order/shipping confirmation emails.
+- `proofImage` = a locally persisted payment proof image `~/.aicard/receipts/receipt-<confirmation-number>-<ts>.png` (thank-you page screenshot, no full card face). **By default do not show this local path** (it would confuse the user); only provide it when the user actively asks for the receipt.
+- **Viewing the order again** (the original thank-you page link `orderUrl` is session-bound and cannot be reopened — testing shows opening it in a new browser bounces back to the home page requiring login, `orderUrlDurable:false`). Guide the user to `receipt.reopenVia`:
+  - The *View your order* link in the merchant confirmation email in the shipping inbox (durably openable)
+  - The *Download to track with Shop* on the thank-you page (requires a Shop account)
+  - The local `proofImage` proof image (offline record)
 
-**失败后先看 `envelope.suggestion`**（它区分两类失败，别无脑 assist）：
-- 「**配送限制**」——该商户不配送此国家（`signals.availableCountries` 列出实际支持的）→ **不要 assist**（弹窗也没用），换收货国家或换商户。
-- 「**可恢复**」——`fill_failed` / `no_card_iframe` / 验证码等 → 用 **assist 模式**重跑：**弹出可见浏览器窗口**、脚本填好已知信息，让用户补齐（国家/州/验证码）并手动点【付款】：
+**After a failure, check `envelope.suggestion` first** (it distinguishes the two failure categories, don't blindly assist):
+- "**Shipping restriction**" — this merchant doesn't ship to this country (`signals.availableCountries` lists the actually supported ones) → **do not assist** (a popup won't help either), switch shipping country or switch merchants.
+- "**Recoverable**" — `fill_failed` / `no_card_iframe` / verification code, etc. → re-run with **assist mode**: **pop up a visible browser window**, the script fills in the known info, and the user completes the rest (country/state/verification code) and manually clicks [Pay]:
 
 ```bash
-aicard shop pay --assist --continue-url "..." --amount ... --email ... <其余收货参数同上>
+aicard shop pay --assist --continue-url "..." --amount ... --email ... <other shipping parameters as above>
 ```
-- assist 保持窗口最多 10 分钟等用户操作；用户点付款抵达成功页即自动收尾（`outcome: success` + `order`）；超时/未完成返回 `assist_incomplete`。
-- 卡号由脚本在浏览器内存填入，**不进对话/LLM/终端**。
+- assist keeps the window open up to 10 minutes waiting for the user; once the user clicks Pay and reaches the success page it auto-finalizes (`outcome: success` + `order`); on timeout/incomplete it returns `assist_incomplete`.
+- The card number is filled by the script in browser memory and **does not enter the conversation/LLM/terminal**.
 
 ### 5.5 Track order (optional)
 
@@ -587,7 +587,7 @@ aicard shop pay --assist --continue-url "..." --amount ... --email ... <其余�
 aicard shop track --order <orderId> [--bearer <JWT>]
 ```
 
-Requires a Token-tier credential (`read_global_api_orders`). **⚠️ 仅能查通过纯 API `complete_checkout` 完成的订单**——当前浏览器填卡路径的订单（`shop pay`）**查不到**（`orderNumber` 是商户确认号非 Global ID）。浏览器路径订单一律靠 5.4 的 `receipt`（确认号 + 本地凭证图 + 确认邮件），不要尝试 `shop track`。
+Requires a Token-tier credential (`read_global_api_orders`). **⚠️ Can only query orders completed via the pure-API `complete_checkout`** — orders from the current browser card-fill path (`shop pay`) **cannot be found** (`orderNumber` is a merchant confirmation number, not a Global ID). For browser-path orders, always rely on the `receipt` from 5.4 (confirmation number + local proof image + confirmation email); do not attempt `shop track`.
 
 ---
 
@@ -653,7 +653,7 @@ The following **key phrases** and **line-level output templates** must be **verb
 
 ### Prohibited Deviations
 
-- ❌ Translate to other languages (e.g., Chinese "余额检查：不足")
+- ❌ Translate to other languages (e.g., a Chinese rendering of "Balance check: insufficient")
 - ❌ Change casing (e.g., "Balance Check")
 - ❌ Abbreviate (e.g., "BNB insuff.")
 - ❌ Add extra decorations (e.g., emoji, bold, `✅`)
