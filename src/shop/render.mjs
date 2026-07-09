@@ -37,7 +37,7 @@ function esc(s) {
  * @param {{title?:string}} [opts]
  * @returns {Promise<string>}
  */
-export async function renderProductsHtml(products, { title = "商品结果" } = {}) {
+export async function renderProductsHtml(products, { title = "Product Results" } = {}) {
   const imgs = await Promise.all(products.map((p) => fetchImageDataUri(p.image)));
 
   const cards = products
@@ -50,7 +50,7 @@ export async function renderProductsHtml(products, { title = "商品结果" } = 
       const desc = p.description ? esc(String(p.description).slice(0, 90)) : "";
       return `<div class="card">
       <div class="num">${i + 1}</div>
-      ${img ? `<div class="imgbox"><img src="${img}" alt=""></div>` : `<div class="imgbox noimg">无图</div>`}
+      ${img ? `<div class="imgbox"><img src="${img}" alt=""></div>` : `<div class="imgbox noimg">No image</div>`}
       <div class="body">
         <div class="title">${esc(p.title)}</div>
         ${desc ? `<div class="desc">${desc}</div>` : ""}
@@ -67,7 +67,7 @@ export async function renderProductsHtml(products, { title = "商品结果" } = 
   return `<div class="wrap">
   <h2>${esc(title)}</h2>
   <div class="grid">${cards}</div>
-  <p class="tip">💡 回复序号选择要购买的商品</p>
+  <p class="tip">💡 Reply with a number to select the product you want to buy</p>
 </div>
 <style>
   .wrap { max-width: 1100px; margin: 0 auto; padding: 20px; font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif; color: #1a1a1a; }

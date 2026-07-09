@@ -38,10 +38,10 @@ export async function tokenizeCard(p) {
   if (!p.tokenizerEndpoint) {
     throw new TokenizeError(
       "TOKENIZER_ENDPOINT_UNKNOWN",
-      "缺少 card handler 的 tokenizer 端点（Shopify 未公开，待确认）。纯 API 路径暂不可用，请走浏览器填卡。"
+      "Missing the card handler's tokenizer endpoint (not published by Shopify, pending confirmation). The pure-API path is not yet available; please use the browser card-fill path."
     );
   }
-  if (!p.checkoutId) throw new TokenizeError("NO_CHECKOUT_ID", "tokenize 必须绑定 checkout_id");
+  if (!p.checkoutId) throw new TokenizeError("NO_CHECKOUT_ID", "tokenize must be bound to a checkout_id");
 
   const { month, year } = splitExpiry(p.card.expiry);
   const body = {
@@ -74,17 +74,17 @@ export async function tokenizeCard(p) {
       signal: ctrl.signal,
     });
   } catch (e) {
-    throw new TokenizeError("TOKENIZE_NETWORK", `tokenize 请求失败: ${e.message}`);
+    throw new TokenizeError("TOKENIZE_NETWORK", `tokenize request failed: ${e.message}`);
   } finally {
     clearTimeout(timer);
   }
 
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new TokenizeError("TOKENIZE_FAILED", `tokenize 失败 HTTP ${res.status}: ${txt.slice(0, 200)}`);
+    throw new TokenizeError("TOKENIZE_FAILED", `tokenize failed HTTP ${res.status}: ${txt.slice(0, 200)}`);
   }
   const j = await res.json().catch(() => ({}));
-  if (!j.token) throw new TokenizeError("TOKENIZE_NO_TOKEN", "tokenize 未返回 token");
+  if (!j.token) throw new TokenizeError("TOKENIZE_NO_TOKEN", "tokenize did not return a token");
 
   return {
     token: j.token,

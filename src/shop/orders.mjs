@@ -26,12 +26,12 @@ import { ucpCall, shopEndpoint } from "./ucp.mjs";
  */
 export async function getOrder(p) {
   if (!p.bearer) {
-    const e = new Error("订单跟踪需要 Token tier 凭证（Bearer JWT + read_global_api_orders scope）");
+    const e = new Error("Order tracking requires Token tier credentials (Bearer JWT + read_global_api_orders scope)");
     e.code = "ORDER_AUTH_REQUIRED";
     throw e;
   }
   if (!p.shopDomain) {
-    const e = new Error("缺少 shopDomain：get_order 是单店端点 {shop}/api/ucp/mcp");
+    const e = new Error("Missing shopDomain: get_order is a single-store endpoint {shop}/api/ucp/mcp");
     e.code = "ORDER_NO_SHOP";
     throw e;
   }

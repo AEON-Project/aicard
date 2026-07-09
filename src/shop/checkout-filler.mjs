@@ -65,8 +65,8 @@ async function textOf(locator) {
 export async function fillCheckout(p) {
   const chromium = await loadPlaywrightChromium(p.onProgress);
 
-  if (!p.continueUrl) throw new FillError("NO_URL", "缺少 continueUrl");
-  if (!p.card?.number || !p.card?.expiry || !p.card?.cvc) throw new FillError("NO_CARD", "缺少完整卡面");
+  if (!p.continueUrl) throw new FillError("NO_URL", "Missing continueUrl");
+  if (!p.card?.number || !p.card?.expiry || !p.card?.cvc) throw new FillError("NO_CARD", "Missing complete card details");
 
   const outDir = pathResolve(p.outDir || "./artifacts");
   const otpFile = pathResolve(p.otpFile || "/tmp/aicard-otp.txt");
@@ -188,7 +188,7 @@ export async function fillCheckout(p) {
     const earlyBody = (await page.locator("body").textContent().catch(() => "")) || "";
     if (/\b404\b|not found|page not found|页面不存在|无法找到/i.test(earlyBody) && !/checkout|payment|shipping|收银|付款/i.test(earlyBody)) {
       result.outcome = "checkout_unavailable";
-      result.signals.reason = "收银台链接无效或已过期（404）。请用 `shop cart` 重新生成 continueUrl 后再付款。";
+      result.signals.reason = "Checkout link is invalid or expired (404). Please regenerate continueUrl with `shop cart` before paying again.";
       await shot("01b-unavailable");
       return finish(browser, result);
     }
@@ -220,12 +220,12 @@ export async function fillCheckout(p) {
       if (/just a moment|attention required|checking your browser|ddos protection|access denied|are you a robot|verify you are human|请稍候|安全验证|人机验证/i.test(title + " " + body)) {
         result.outcome = "bot_blocked";
         result.signals.botBlockTitle = title.slice(0, 80);
-        result.signals.reason = `被反爬拦截（页面："${title.slice(0, 60)}"），非破解可解的机器人防护。可尝试：稍后重试；配置住宅代理(--proxy / env HTTPS_PROXY)换出口 IP 降低被拦概率；部分商户反爬极强可能无法自动完成。`;
+        result.signals.reason = `Blocked by anti-bot protection (page: "${title.slice(0, 60)}"); this is bot protection that cannot be bypassed. You can try: retrying later; configuring a residential proxy (--proxy / env HTTPS_PROXY) to change the egress IP and reduce the chance of being blocked; some merchants have very strong anti-bot measures that may not be completable automatically.`;
         await shot("01c-bot-blocked");
         return finish(browser, result);
       }
       result.outcome = "checkout_unavailable";
-      result.signals.reason = "收银台表单加载失败（重载后仍未出现表单，多为网络异常或链接失效）。请检查网络或用 `shop cart` 重新生成 continueUrl。";
+      result.signals.reason = "Checkout form failed to load (form still not present after reload; usually a network issue or an invalid link). Please check your network or regenerate continueUrl with `shop cart`.";
       await shot("01b-unavailable");
       return finish(browser, result);
     }
@@ -297,20 +297,20 @@ export async function fillCheckout(p) {
       result.signals.availableCountries = avail.slice(0, 25);
       result.outcome = "address_incomplete";
       result.signals.reason = avail.length
-        ? `国家 '${A.country}' 未匹配到此收银台的可选项（可能该商户不配送该地区）。可选：${avail.slice(0, 10).join(", ")}${avail.length > 10 ? " …" : ""}`
-        : `国家 '${A.country}' 未能选中，且未能读取收银台国家列表`;
+        ? `Country '${A.country}' did not match any option in this checkout (the merchant may not ship to this region). Available: ${avail.slice(0, 10).join(", ")}${avail.length > 10 ? " …" : ""}`
+        : `Country '${A.country}' could not be selected, and the checkout's country list could not be read`;
       await shot("02b-address-error");
       if (!p.assist) return finish(browser, result);
     }
     if (A.region && result.signals.regionSelected === false) {
       result.outcome = "address_incomplete";
-      result.signals.reason = `州/省未能选中：'${A.region}'（请核对 --region 取值是否与该国家的省/州名一致）`;
+      result.signals.reason = `State/province could not be selected: '${A.region}' (please verify that the --region value matches a province/state name for this country)`;
       await shot("02b-address-error");
       if (!p.assist) return finish(browser, result);
     }
     if (result.signals.addressError && /state|province|州|省/i.test(result.signals.addressError) && !A.region) {
       result.outcome = "address_incomplete";
-      result.signals.reason = "该收银台要求 state/province，但未提供 --region，请补充。";
+      result.signals.reason = "This checkout requires a state/province, but --region was not provided. Please add it.";
       await shot("02b-address-error");
       if (!p.assist) return finish(browser, result);
     }
@@ -359,7 +359,7 @@ export async function fillCheckout(p) {
     if (shipErr) {
       result.outcome = "shipping_not_ready";
       result.signals.shippingReady = false; // 以报错为准，纠正可能被残留 radio 带偏的 picked
-      result.signals.reason = `收银台配送不可用：${shipErr.slice(0, 160)}（常见于批发店最低起订额/重量门槛；未填卡、未扣款）。请调整购物车数量/金额或换商户。`;
+      result.signals.reason = `Checkout shipping is unavailable: ${shipErr.slice(0, 160)} (common with wholesale-store minimum-order/weight thresholds; no card entered, no charge made). Please adjust the cart quantity/amount or switch merchants.`;
       await shot("03b-shipping-unavailable");
       if (!p.assist) return finish(browser, result);
     }
@@ -389,7 +389,7 @@ export async function fillCheckout(p) {
       const hasWalletOnly = (await page.getByText(/paypal|apple pay|google pay|afterpay|shop pay/i).count().catch(() => 0)) > 0;
       if (!hasCardOption && hasWalletOnly) {
         result.outcome = "card_not_supported";
-        result.signals.reason = "该商户不支持信用卡/借记卡付款（仅 PayPal 等钱包），虚拟卡无法使用。请换一家支持信用卡的商户。";
+        result.signals.reason = "This merchant does not support credit/debit card payment (wallets only, e.g. PayPal), so the virtual card cannot be used. Please switch to a merchant that supports credit cards.";
         await shot("04-no-card-option");
         return finish(browser, result); // 换商户才有用，assist 也补不出卡选项
       }
@@ -461,7 +461,7 @@ export async function fillCheckout(p) {
     //    在点付款【之前】中止：未提交、未扣款、可安全重试。避免“已提交但状态未知”的模糊态。
     if (ship.required && !ship.picked) {
       result.outcome = "shipping_not_ready";
-      result.signals.reason = "配送方式未加载出来（收银台运费率未就绪，点付款会卡住）。未提交付款、未扣款——请重试（用 `shop cart` 重新生成 continueUrl 后再 pay）。";
+      result.signals.reason = "Shipping method did not load (checkout shipping rates not ready; clicking Pay would hang). Payment was not submitted and no charge was made — please retry (regenerate continueUrl with `shop cart`, then pay).";
       await shot("05c-shipping-not-ready");
       return finish(browser, result);
     }
@@ -626,14 +626,14 @@ export async function fillCheckout(p) {
             if (ferr) {
               outcome = "challenge_3ds";
               result.signals.otpError = ferr.trim().slice(0, 120);
-              result.signals.reason = `验证码未通过：${ferr.trim().slice(0, 80)}（码错/过期）。请重新获取验证码后重试。`;
+              result.signals.reason = `Verification code was not accepted: ${ferr.trim().slice(0, 80)} (wrong or expired code). Please obtain a new code and retry.`;
               log("OTP rejected by 3DS: " + ferr.trim().slice(0, 60));
               break;
             }
             // 3 次提交后仍停在输入框、且无明确报错 → 提前中止（码错/过期或提交未被接受），不空转到超时
             if (submitCount >= 3 && Date.now() - lastSubmit > 12000) {
               outcome = "challenge_3ds";
-              result.signals.reason = "验证码提交 3 次后仍停在输入步（码错/过期或提交未被接受）。请重新获取验证码后重试。";
+              result.signals.reason = "Still stuck at the input step after 3 verification-code submissions (wrong/expired code, or the submission was not accepted). Please obtain a new code and retry.";
               log("OTP not accepted after 3 attempts — aborting early");
               break;
             }
@@ -1025,14 +1025,14 @@ async function loadPlaywrightChromium(log) {
     return (await import("playwright")).chromium;
   } catch (e1) {
     const d1 = (e1?.message || "").split("\n")[0];
-    say("playwright 加载失败,尝试自动修复(npm i -g playwright)…：" + d1);
+    say("Failed to load playwright; attempting auto-repair (npm i -g playwright)…: " + d1);
     try {
       const { execFileSync } = await import("node:child_process");
       execFileSync("npm", ["i", "-g", "playwright"], { stdio: ["ignore", 2, 2], timeout: 300000 });
     } catch (ie) {
       throw new FillError(
         "PLAYWRIGHT_MISSING",
-        `playwright 加载失败且自动修复未成功（${d1}）。请手动运行：npm i -g playwright（权限不足加 sudo）;必要时再 npx playwright install chromium`
+        `Failed to load playwright and auto-repair was unsuccessful (${d1}). Please run manually: npm i -g playwright (add sudo if you lack permissions); if needed, then run npx playwright install chromium`
       );
     }
     // 删掉本包内【损坏】的 playwright/playwright-core 副本（无 package.json）——它会遮蔽刚装好的全局副本
@@ -1044,10 +1044,10 @@ async function loadPlaywrightChromium(log) {
       }
     } catch { /* ignore */ }
     try {
-      say("playwright 已修复,重试加载…");
+      say("playwright repaired; retrying load…");
       return (await import("playwright")).chromium;
     } catch {
-      throw new FillError("PLAYWRIGHT_REPAIRED_RERUN", "playwright 已自动修复完成,请重新运行刚才的命令即可。");
+      throw new FillError("PLAYWRIGHT_REPAIRED_RERUN", "playwright has been auto-repaired; please re-run the previous command.");
     }
   }
 }
@@ -1067,7 +1067,7 @@ async function launchWithAutoInstall(chromium, opts, log) {
     } catch (ie) {
       throw new FillError(
         "BROWSER_INSTALL_FAILED",
-        "浏览器内核自动下载失败，请手动运行：npx playwright install chromium（" + String(ie.message).split("\n")[0] + "）"
+        "Browser engine auto-download failed. Please run manually: npx playwright install chromium (" + String(ie.message).split("\n")[0] + ")"
       );
     }
     log("Browser engine ready, continuing payment…");

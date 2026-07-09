@@ -36,11 +36,11 @@ export class CardError extends Error {
 export async function issueCard(p) {
   const serviceUrl = resolve(p.serviceUrl, "AGENT_PAY_SERVICE_URL", "serviceUrl");
   const privateKey = resolve(p.privateKey, "EVM_PRIVATE_KEY", "privateKey");
-  if (!privateKey) throw new CardError("WALLET_NOT_CONFIGURED", "本地钱包未配置，请先运行 aicard setup --check");
+  if (!privateKey) throw new CardError("WALLET_NOT_CONFIGURED", "Local wallet not configured. Please run aicard setup --check first.");
 
   const amount = Number(p.amount);
   if (isNaN(amount) || amount < MIN_AMOUNT || amount > MAX_AMOUNT)
-    throw new CardError("AMOUNT_OUT_OF_RANGE", `金额需在 $${MIN_AMOUNT} ~ $${MAX_AMOUNT}`, { min: MIN_AMOUNT, max: MAX_AMOUNT });
+    throw new CardError("AMOUNT_OUT_OF_RANGE", `Amount must be between $${MIN_AMOUNT} and $${MAX_AMOUNT}`, { min: MIN_AMOUNT, max: MAX_AMOUNT });
 
   const appId = p.appId || "TEST000001";
   const url = `${serviceUrl}/open/ai/x402/card/create?amount=${encodeURIComponent(amount)}&appId=${encodeURIComponent(appId)}`;
@@ -51,10 +51,10 @@ export async function issueCard(p) {
   // 2. 余额 / 授权检查（不足即报错，不做交互充值）
   const { address, usdt, bnbRaw } = await getWalletBalance(privateKey);
   if (parseFloat(usdt) < req.amountUsdt)
-    throw new CardError("INSUFFICIENT_USDT", `USDT 不足：需 ${req.amountUsdt}，当前 ${usdt}。请先 aicard topup`, { required: req.amountUsdt, available: usdt });
+    throw new CardError("INSUFFICIENT_USDT", `Insufficient USDT: need ${req.amountUsdt}, currently have ${usdt}. Please run aicard topup first.`, { required: req.amountUsdt, available: usdt });
   const allowance = await getAllowance(address);
   if (allowance < BigInt(req.amountWei) && bnbRaw === 0n)
-    throw new CardError("NEEDS_APPROVE_GAS", "需要 approve 授权但本地钱包无 BNB。请先 aicard gas，或用 aicard create 完成首次授权");
+    throw new CardError("NEEDS_APPROVE_GAS", "An approve authorization is required but the local wallet has no BNB. Please run aicard gas first, or use aicard create to complete the initial authorization.");
 
   // 3. 手动签名并提交（沿用第一次的精确金额，避免二次请求金额漂移）
   const { client } = createX402Api(privateKey);
@@ -73,7 +73,7 @@ export async function issueCard(p) {
   try {
     response = await axios.get(url, { headers: { ...payHeaders, "Access-Control-Expose-Headers": "PAYMENT-RESPONSE" } });
   } catch (e) {
-    throw new CardError("PAYMENT_FAILED", `发卡支付失败: ${e.message}`, { status: e.response?.status });
+    throw new CardError("PAYMENT_FAILED", `Card issuance payment failed: ${e.message}`, { status: e.response?.status });
   }
 
   const orderNo = req.orderNo || response.data?.model?.orderNo || response.data?.orderNo || null;
@@ -81,7 +81,7 @@ export async function issueCard(p) {
   // 4. 从未脱敏 raw response 提取完整卡面；首响应未 ready 则轮询
   let card = extractCard(response.data);
   if (!card && orderNo) card = await pollForCard(serviceUrl, orderNo);
-  if (!card) throw new CardError("CARD_NOT_READY", "发卡请求已提交但未取到完整卡面", { orderNo });
+  if (!card) throw new CardError("CARD_NOT_READY", "Card issuance request submitted but full card details could not be retrieved", { orderNo });
 
   // 5. 入本地卡列表（供后续购物复用）
   addCard({ orderNo, ...card, amount, currency: "USD" });
