@@ -34,9 +34,11 @@ metadata:
 compatibility: Requires Node.js >= 18 and npm
 ---
 
-# x402 Virtual Card Skill
+# Virtual Card Skill
 
-Create one-time-use virtual debit cards (Visa/Mastercard) for agents using USDT on BSC via the x402 HTTP payment protocol.
+Create one-time-use virtual debit cards (Visa/Mastercard) that your agent can **pay with online** — top it up, then spend at real merchants.
+
+**What you can pay for:** shop and check out across the **Shopify merchant network** (a huge catalog of online stores — apparel, electronics, home, beauty, toys, and more) — search a product, build a cart, and complete the purchase end-to-end, with real orders shipped to your address. The card also works anywhere Visa/Mastercard is accepted online.
 
 > 🧭 **Audience routing**
 > - **End-user workflow (this skill)** — Helping a user buy / manage their own card inside an IDE / chat. Continue reading.
@@ -44,7 +46,7 @@ Create one-time-use virtual debit cards (Visa/Mastercard) for agents using USDT 
 
 > ⚡ **Gas Model**:
 > BSC USDT does not support EIP-3009. The client must perform a one-time `approve` authorization (on-chain tx) before card creation; the actual USDT transfer is executed by the server.
-> - **Create card (x402)**: Check allowance → if insufficient and no BNB, auto-transfer 0.0003 BNB via WalletConnect for approve gas → if USDT insufficient, auto-transfer USDT → EIP-712 signature (gasless) → server submits transfer (server pays gas)
+> - **Create card**: Check allowance → if insufficient and no BNB, auto-transfer 0.0003 BNB via WalletConnect for approve gas → if USDT insufficient, auto-transfer USDT → EIP-712 signature (gasless) → server submits transfer (server pays gas)
 > - **Top up (topup)**: Single WalletConnect session, transfers USDT to local wallet. User confirms **1 transaction** in wallet app
 > - **Withdraw (withdraw)**: Local wallet sends ERC20 transfer + BNB directly on-chain, requires BNB for gas
 > - **Gas top-up (gas)**: Transfers BNB only (used when withdraw reports "No BNB for gas" or additional BNB is needed)
@@ -121,17 +123,25 @@ Always output a progress line first:
 > Pre-check in progress...
 ```
 
+> 💡 On a successful pre-check, briefly tell the user **what they can do** (adapt to their language), so they know the card's purpose — highlight Shopify merchant coverage, keep it short, and **do not** mention x402 / USDT / on-chain internals here:
+>
+> > **What you can do with this card:**
+> > - 🛍️ **Shop & pay across the Shopify merchant network** — search products, build a cart, and check out end-to-end (`shop search` → `shop cart` → `shop pay`); real orders ship to your address.
+> > - 💳 Create / check / top up one-time virtual Visa·Mastercard for your agent.
+> >
+> > Tell me what you'd like to buy, or say "create a card" to set one up.
+
 #### Branch A: Wallet already exists (`ready: true`, `created: false`)
 
 ```
-0x0...{last4} Ready. Proceed to create a card for your agent.
+0x0...{last4} Ready. (Then add the "What you can do" blurb above.)
 ```
 
 #### Branch B: Auto-created this time (`ready: true`, `created: true`)
 
 ```
 Auto-creating your designated wallet...
-0x0...{last4} Ready. Proceed to create a card for your agent.
+0x0...{last4} Ready. (Then add the "What you can do" blurb above.)
 ```
 
 > - `{last4}` is the last 4 characters of the returned `address`
