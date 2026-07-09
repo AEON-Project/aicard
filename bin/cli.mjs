@@ -206,6 +206,7 @@ shop
   .option("--otp-file <path>", "OTP relay file path (default /tmp/aicard-otp.txt)")
   .option("--out <dir>", "Screenshot output dir (default ./artifacts)")
   .option("--html <path>", "Also render a self-contained order-flow timeline HTML page to this path (card-entry step masked, never embeds card PII)")
+  .option("--progress-file <path>", "Stream structured per-step events (JSONL) to this file as each step completes — tail it to show live progress (card step is masked, no card PII)")
   .action(async (opts) => {
     const { pay } = await import("../src/commands/shop.mjs");
     return pay(opts);
@@ -228,6 +229,17 @@ shop
   .action(async () => {
     const { cards } = await import("../src/commands/shop.mjs");
     return cards();
+  });
+
+shop
+  .command("steps")
+  .description("Render the live per-step progress (from `shop pay --progress-file`) as an image+text view; call repeatedly to refresh the Artifact")
+  .requiredOption("--progress-file <path>", "The JSONL event file written by `shop pay --progress-file`")
+  .option("--html <path>", "Render the image+text step view to this path (republish as an Artifact)")
+  .option("--title <text>", "Title for the view")
+  .action(async (opts) => {
+    const { steps } = await import("../src/commands/shop.mjs");
+    return steps(opts);
   });
 
 // 用 parseAsync 拿到 action 的 promise，命令跑完后强制退出。

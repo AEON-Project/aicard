@@ -192,53 +192,157 @@ export async function renderProductHtml(p, { buyPrompt = null } = {}) {
 </style>`;
 }
 
-// 收银台分步截图 tag → 步骤名。含【明文卡面】的 05-card-filled/05b/05c 一律不嵌图（安全红线）。
-const STEP_LABELS = {
-  "01-open": "Open checkout",
-  "02-address": "Fill address",
-  "03-shipping": "Wait for shipping rates",
-  "06-after-pay": "Submit payment",
-  "08-after-challenge": "Confirmed",
-};
+// 含【明文卡面】的填卡截图 tag：绝不内嵌（安全红线）。
 const CARD_STEP_TAGS = ["05-card-filled", "05b-refill-failed", "05c-shipping-not-ready"];
+const STATUS_ICON = { done: "✓", failed: "✕", pending: "⏳", skipped: "◦", running: "•" };
+
+// 单个步骤卡片（图文）：timeline（事后）与实时流共用。masked=打码占位（绝不嵌卡面图）；img=嵌截图；否则 emoji/状态图标。
+function stepRowHtml(s, i) {
+  const vis = s.masked
+    ? `<div class="shot cardshot"><div class="cardmask">💳<div class="masktip">masked for security</div></div></div>`
+    : s.img
+      ? `<div class="shot"><img src="${s.img}" alt=""></div>`
+      : `<div class="shot noshot">${s.emoji || STATUS_ICON[s.status] || ""}</div>`;
+  return `<div class="step ${s.status}">
+      <div class="stepno">${i + 1}</div>
+      ${vis}
+      <div class="stepinfo">
+        <div class="stepname">${esc(s.name)} <span class="badge ${s.status}">${STATUS_ICON[s.status] || ""} ${esc(s.status)}</span></div>
+        ${s.caption ? `<div class="stepcap">${esc(s.caption)}</div>` : ""}
+      </div>
+    </div>`;
+}
+
+// 步骤器 CSS（timeline 与实时流共用，视觉一致）
+const STEPPER_CSS = `
+  .steps { display: flex; flex-direction: column; gap: 0; }
+  .step { position: relative; display: grid; grid-template-columns: 34px 120px 1fr; align-items: center; gap: 14px; padding: 12px 0; border-left: 2px solid #ececec; margin-left: 16px; padding-left: 20px; }
+  .step:last-child { border-left-color: transparent; }
+  .stepno { position: absolute; left: -15px; width: 28px; height: 28px; border-radius: 50%; background: #111; color: #fff; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+  .step.failed .stepno { background: #c0392b; }
+  .step.skipped .stepno { background: #bbb; }
+  .step.pending .stepno, .step.running .stepno { background: #d08700; }
+  .shot { width: 120px; height: 150px; border: 1px solid #ececec; border-radius: 8px; overflow: hidden; background: #f6f6f6; }
+  .shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+  .shot.noshot { display: flex; align-items: center; justify-content: center; font-size: 30px; color: #bbb; }
+  .cardshot { display: flex; align-items: center; justify-content: center; }
+  .cardmask { color: #999; font-size: 30px; text-align: center; }
+  .masktip { font-size: 10px; margin-top: 6px; color: #bbb; }
+  .stepinfo { min-width: 0; }
+  .stepname { font-size: 15px; font-weight: 600; }
+  .stepcap { font-size: 13px; color: #777; margin-top: 3px; }
+  .badge { font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 999px; vertical-align: middle; margin-left: 4px; }
+  .badge.done { background: #e6f4ea; color: #1a7f37; }
+  .badge.failed { background: #fdecea; color: #c0392b; }
+  .badge.pending, .badge.running { background: #fff4e0; color: #d08700; }
+  .badge.skipped { background: #f0f0f0; color: #999; }
+  @media (max-width: 560px){ .step { grid-template-columns: 28px 1fr; } .shot { display: none; } }`;
 
 /**
- * 渲染单次下单流程时间线 HTML：订单摘要（商户/商品/实扣/卡末4/收货）+ 节点截图时间线。
- * 【安全】只内嵌不含卡面的截图；填卡节点仅显示"已打码"占位，绝不嵌 05-card-filled（含明文卡号/CVC）。
+ * 渲染下单流程为 6 个独立命名步骤：开卡→打开收银台→填写地址→填写卡信息→提交→收据。
+ * 每步含状态(done/failed/pending/skipped) + 可视：收银台步骤嵌无卡面截图；
+ * 【安全】填写卡信息步骤只显示"已打码"占位，绝不嵌含明文卡号/CVC 的 05-card-filled。
+ * 首尾两步(开卡/收据)为非截图步骤，用摘要卡呈现。
  * @param {object} result - fillCheckout 返回（outcome/artifacts/order/signals）
  * @param {object|null} receipt - shop.pay 组装的收据（masked last4/shipTo/amountCharged…）
- * @param {{title?:string}} [opts]
+ * @param {{title?:string, card?:{source?:string,last4?:string,amount?:(string|number)}}} [opts]
  */
-export async function renderOrderTimelineHtml(result, receipt, { title = "Order flow" } = {}) {
+export async function renderOrderTimelineHtml(result, receipt, { title = "Order flow", card = null } = {}) {
   const artifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
   const tagOf = (fp) => String(fp).split("/").pop().replace(/^co-/, "").replace(/\.png$/i, "");
-
-  // 时间线节点：按拍摄顺序；卡步骤转占位（不嵌图），其余可识别步骤嵌图
-  const seen = new Set();
-  const nodes = [];
-  for (const fp of artifacts) {
-    const tag = tagOf(fp);
-    if (CARD_STEP_TAGS.includes(tag)) {
-      if (seen.has("card")) continue;
-      seen.add("card");
-      nodes.push({ card: true, label: "Card filled (masked)" });
-      continue;
+  const byTag = {};
+  for (const fp of artifacts) { const t = tagOf(fp); if (!(t in byTag)) byTag[t] = fp; }
+  const has = (t) => Boolean(byTag[t]);
+  const pickShot = async (tags, { maxBytes } = {}) => {
+    for (const t of tags) {
+      if (byTag[t]) { const u = await readImageDataUri(byTag[t], maxBytes ? { maxBytes } : undefined); if (u) return u; }
     }
-    const label = STEP_LABELS[tag];
-    if (!label || seen.has(tag)) continue;
-    seen.add(tag);
-    const dataUri = await readImageDataUri(fp);
-    if (dataUri) nodes.push({ img: dataUri, label });
-  }
+    return null;
+  };
 
-  const steps = nodes
-    .map((n, i) => {
-      const shot = n.card
-        ? `<div class="shot cardshot"><div class="cardmask">💳<div class="masktip">masked for security</div></div></div>`
-        : `<div class="shot"><img src="${n.img}" alt=""></div>`;
-      return `<div class="step">${shot}<div class="steplabel"><span class="stepno">${i + 1}</span>${esc(n.label)}</div></div>`;
-    })
-    .join(`<div class="arrow">→</div>`);
+  const outcome = result?.outcome;
+  const paid = Boolean(result?.signals?.paySubmitted);
+  const success = outcome === "success";
+  const is3ds = outcome === "challenge_3ds" || outcome === "challenge_captcha";
+
+  // —— 完整购物旅程 9 步 ——（img=嵌图；masked=打码占位；否则纯摘要）
+  // 前 3 步（选品/详情/下单）发生在浏览器会话之前、无截图；到达 pay 时它们必然已完成，作为"已完成"前置标记。
+  const steps = [];
+  const itemTitle = receipt
+    ? (Array.isArray(receipt.items) ? receipt.items.map((it) => it.title || it).join(", ") : receipt.items)
+    : null;
+
+  // 1. 选品
+  steps.push({ name: "Select product", status: "done", emoji: "🔍", caption: itemTitle || "Product chosen" });
+  // 2. 详情
+  steps.push({ name: "Product details", status: "done", emoji: "📋", caption: "Reviewed details & options" });
+  // 3. 下单
+  steps.push({
+    name: "Confirm order",
+    status: "done",
+    emoji: "🧾",
+    caption: receipt?.amountCharged ? `Total ${receipt.amountCharged}` : (card?.amount != null ? `$${card.amount}` : "Order confirmed"),
+  });
+
+  // 4. 开卡
+  steps.push({
+    name: "Issue card",
+    status: card ? "done" : (has("01-open") ? "done" : "skipped"),
+    caption: card
+      ? (card.source === "new"
+          ? `Issued new virtual card •••• ${esc(card.last4 || "----")}${card.amount != null ? ` ($${esc(card.amount)})` : ""}`
+          : `Reused cached card •••• ${esc(card.last4 || "----")} — wallet untouched`)
+      : "Card ready",
+    emoji: "💳",
+  });
+
+  // 5. 打开收银台
+  steps.push({
+    name: "Open checkout",
+    status: (outcome === "checkout_unavailable" || outcome === "bot_blocked") ? "failed" : (has("01-open") ? "done" : "skipped"),
+    img: await pickShot(["01-open"]),
+    caption: outcome === "bot_blocked" ? "Blocked by merchant anti-bot" : outcome === "checkout_unavailable" ? "Checkout link invalid/expired" : "",
+  });
+
+  // 6. 填写地址
+  steps.push({
+    name: "Fill address",
+    status: outcome === "address_incomplete" ? "failed" : (has("02-address") || has("03-shipping") ? "done" : "skipped"),
+    img: outcome === "address_incomplete"
+      ? await pickShot(["02b-address-error", "02-address"])
+      : await pickShot(["03-shipping", "02-address"]),
+    caption: outcome === "address_incomplete" ? "Address rejected (missing/mismatched field)" : outcome === "shipping_not_ready" ? "Shipping method never loaded" : "",
+  });
+
+  // 7. 填写卡信息（打码占位，绝不嵌图）
+  steps.push({
+    name: "Fill card details",
+    status: has("05-card-filled") ? "done"
+      : (["fill_failed", "no_card_iframe", "card_not_supported"].includes(outcome) ? "failed"
+      : (has("03-shipping") ? "skipped" : "skipped")),
+    masked: true,
+    caption: outcome === "card_not_supported" ? "Merchant does not accept cards" : "Entered on the merchant page — masked for security",
+  });
+
+  // 8. 提交
+  steps.push({
+    name: "Submit payment",
+    status: success ? "done" : (is3ds ? "pending" : (paid ? "pending" : "skipped")),
+    img: await pickShot(["06-after-pay"]),
+    caption: is3ds ? "3DS verification required (not yet authorized = not charged)" : (paid && !success ? "Submitted — result unconfirmed" : ""),
+  });
+
+  // 9. 收据
+  steps.push({
+    name: "Receipt",
+    status: success ? "done" : "skipped",
+    img: success ? await pickShot(["08-after-challenge"], { maxBytes: 1_600_000 }) : null,
+    caption: success
+      ? [receipt?.orderNumber ? `Order ${receipt.orderNumber}` : "", receipt?.amountCharged ? `charged ${receipt.amountCharged}` : ""].filter(Boolean).join(" · ")
+      : "Not reached",
+  });
+
+  const stepHtml = steps.map(stepRowHtml).join("");
 
   const rows = [];
   const push = (k, v) => { if (v) rows.push(`<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`); };
@@ -254,19 +358,19 @@ export async function renderOrderTimelineHtml(result, receipt, { title = "Order 
     if (receipt.shipTo) push("Ship to", [receipt.shipTo.name, receipt.shipTo.address].filter(Boolean).join(" · "));
   }
   const summary = rows.length ? `<table class="osum">${rows.join("")}</table>` : "";
-  const status =
-    result?.outcome === "success"
-      ? `<span class="ok">✅ Payment successful</span>`
-      : `<span class="warn">⚠️ ${esc(result?.outcome || "incomplete")}</span>`;
+  const status = success
+    ? `<span class="ok">✅ Payment successful</span>`
+    : `<span class="warn">⚠️ ${esc(outcome || "incomplete")}</span>`;
 
   return `<div class="owrap">
   <div class="ohead"><h2>${esc(title)}</h2>${status}</div>
   ${summary}
-  ${steps ? `<h3>Checkout steps</h3><div class="timeline">${steps}</div>` : ""}
-  <p class="tip">🔒 Card details are never shown; the card-entry step is masked. Card-entry screenshots are excluded from this view.</p>
+  <h3>Steps</h3>
+  <div class="steps">${stepHtml}</div>
+  <p class="tip">🔒 Card details are never shown; the "Fill card details" step is masked. Card-entry screenshots (which would show the full card number/CVC) are never embedded.</p>
 </div>
 <style>
-  .owrap { max-width: 1000px; margin: 0 auto; padding: 20px; font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif; color: #1a1a1a; }
+  .owrap { max-width: 820px; margin: 0 auto; padding: 20px; font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif; color: #1a1a1a; }
   .ohead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
   .ohead h2 { font-size: 20px; font-weight: 650; margin: 0; }
   .ok { color: #1a7f37; font-weight: 600; font-size: 14px; }
@@ -276,16 +380,61 @@ export async function renderOrderTimelineHtml(result, receipt, { title = "Order 
   .osum td { padding: 9px 14px; }
   .osum tr + tr th, .osum tr + tr td { border-top: 1px solid #f0f0f0; }
   h3 { font-size: 15px; font-weight: 600; margin: 22px 0 12px; }
-  .timeline { display: flex; align-items: flex-start; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
-  .step { flex: 0 0 auto; width: 200px; text-align: center; }
-  .shot { width: 200px; height: 250px; border: 1px solid #ececec; border-radius: 10px; overflow: hidden; background: #f6f6f6; }
-  .shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
-  .cardshot { display: flex; align-items: center; justify-content: center; }
-  .cardmask { color: #999; font-size: 40px; text-align: center; }
-  .masktip { font-size: 12px; margin-top: 8px; color: #bbb; }
-  .steplabel { margin-top: 8px; font-size: 13px; color: #444; display: flex; align-items: center; justify-content: center; gap: 6px; }
-  .stepno { width: 20px; height: 20px; border-radius: 50%; background: #111; color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
-  .arrow { flex: 0 0 auto; align-self: center; color: #ccc; font-size: 20px; padding-top: 100px; }
   .tip { margin-top: 18px; font-size: 12px; color: #888; }
+${STEPPER_CSS}
+</style>`;
+}
+
+/**
+ * 由实时事件流渲染图文步骤视图（供 agent 边 tail progress 文件边刷新同一 Artifact）。
+ * 【安全】masked 步骤（填卡）不嵌图；其余步骤若事件带 shot 路径则内嵌该截图。
+ * @param {object[]} events - 解析后的 step 事件数组（每条含 id/label/status/shot?/masked?/note?）
+ * @param {{title?:string}} [opts]
+ */
+export async function renderStepStreamHtml(events, { title = "Order progress" } = {}) {
+  // 折叠为每个 step id 的最新状态，保持首见顺序
+  const order = [];
+  const byId = {};
+  for (const e of Array.isArray(events) ? events : []) {
+    if (!e || e.evt !== "step" || !e.id) continue;
+    if (!(e.id in byId)) order.push(e.id);
+    byId[e.id] = e;
+  }
+
+  const steps = [];
+  for (const id of order) {
+    const e = byId[id];
+    const noShot = id === "issue_card" || id === "receipt";
+    // 仅非打码、非首尾摘要步骤且事件带 shot 时嵌图；打码步骤绝不取图
+    const img = (!e.masked && !noShot && e.shot) ? await readImageDataUri(e.shot) : null;
+    steps.push({
+      name: e.label || id,
+      status: e.status || "done",
+      masked: !!e.masked,
+      img,
+      emoji: id === "issue_card" ? "💳" : id === "receipt" ? "🧾" : null,
+      caption: e.note || "",
+    });
+  }
+
+  const done = steps.filter((s) => s.status === "done").length;
+  const anyFailed = steps.some((s) => s.status === "failed");
+  const head = anyFailed
+    ? `<span class="warn">⚠️ ${done}/${steps.length} done</span>`
+    : `<span class="ok">${done}/${steps.length} steps</span>`;
+
+  return `<div class="owrap">
+  <div class="ohead"><h2>${esc(title)}</h2>${head}</div>
+  <div class="steps">${steps.map(stepRowHtml).join("")}</div>
+  <p class="tip">🔒 The "Fill card details" step is masked — card-entry screenshots (full card number/CVC) are never embedded.</p>
+</div>
+<style>
+  .owrap { max-width: 820px; margin: 0 auto; padding: 20px; font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif; color: #1a1a1a; }
+  .ohead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  .ohead h2 { font-size: 20px; font-weight: 650; margin: 0; }
+  .ok { color: #1a7f37; font-weight: 600; font-size: 14px; }
+  .warn { color: #b26a00; font-weight: 600; font-size: 14px; }
+  .tip { margin-top: 18px; font-size: 12px; color: #888; }
+${STEPPER_CSS}
 </style>`;
 }

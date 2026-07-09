@@ -603,6 +603,23 @@ In **Artifact-capable clients (Claude Desktop / web)**, make the shopping flow v
 | Detail | `shop product --id … --html <path>` | Product-detail card (large image + price + spec table; clickable to buy) |
 | Order | `shop pay … --html <path>` | Order-flow timeline: summary (merchant / item / amount / `•••• last4` / ship-to) + step screenshots |
 
+#### Live step-by-step (real-time, image+text)
+
+The purchase flow (`issue card → open checkout → fill address → shipping → fill card → submit → receipt`) previously returned only at the end. To let the user **perceive each step live** — and to keep the presentation **AI-dynamic, not a fixed template** — drive it yourself from an event stream:
+
+1. Run pay in the **background** with a progress file (and the final timeline):
+   ```bash
+   aicard shop pay … --progress-file /tmp/aicard-steps.jsonl --html /tmp/aicard-order.html   # run in background
+   ```
+   As each real step completes, the CLI appends one structured JSON event (`{id,label,status,shot?,masked?,note?}`) to the progress file. Steps are **emergent**, not fixed: which appear (and their `status`: done/failed/pending/running) reflect what actually happened (3DS, no-ship, cached vs new card…).
+2. While it runs, **poll and render the live image+text view**, republishing the *same* Artifact each time so the user watches it fill in:
+   ```bash
+   aicard shop steps --progress-file /tmp/aicard-steps.jsonl --html /tmp/aicard-live.html
+   ```
+   `shop steps` returns `{steps:[…latest status per step…], terminal}` and (with `--html`) renders the image+text stepper. Republish `/tmp/aicard-live.html` to the same Artifact; narrate in your own words as steps land. Stop when `terminal:true` (receipt reached or a step failed), then show the final `--html` timeline / `receipt`.
+
+**You** decide cadence, wording, and how to react to each step — the CLI only supplies reliable events + screenshots; the presentation is yours to compose dynamically. Do **not** hardcode a fixed step list in your narration — read the actual events.
+
 Rules:
 1. **Publish, don't paste** — read the generated file and render it as an Artifact (it's fully self-contained: images embedded as data URIs, no external fetches, so it displays under the Artifact CSP). Keep one Artifact per stage; reuse/redeploy rather than spawning many.
 2. **Clickable cards need a client that can send prompts back** (Claude Desktop). Elsewhere the click is a no-op and the user picks by replying a number — always keep that textual path working.

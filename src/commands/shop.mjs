@@ -171,7 +171,13 @@ export async function pay(opts) {
       return emitErr("shop.pay", "INVALID_COUNTRY", { message: `Country '${shipping.country}' is not a known country name or ISO code (examples: United States / US / Hong Kong / GB)`, field: "country" });
 
     const { findUsableCard, markCardUsed } = await import("../shop/cards.mjs");
-    const { fillCheckout } = await import("../shop/checkout-filler.mjs");
+    const { fillCheckout, appendStepEvent } = await import("../shop/checkout-filler.mjs");
+
+    // 实时步骤事件流（可选）：agent 后台跑 shop pay + tail 此文件，逐步呈现进度。
+    // shop.mjs 负责重置文件并写 checkout 之前的 issue_card 事件；fillCheckout 只向其追加收银台各步。
+    const progressFile = opts.progressFile ? String(opts.progressFile) : null;
+    if (progressFile) { try { const { rmSync, existsSync } = await import("node:fs"); if (existsSync(progressFile)) rmSync(progressFile); } catch {} }
+    const step = (event) => appendStepEvent(progressFile, event);
 
     // 1. 先用本地可用卡（面额够且未用）→ 命中则跳过钱包，直接付款
     let card = findUsableCard(amount);
@@ -179,6 +185,7 @@ export async function pay(opts) {
     let cardSource = "cache";
 
     // 2. 无可用卡 → 发新卡（需钱包 USDT）。一次性卡模型下"卡充值"即"发新卡"。
+    step({ evt: "step", id: "issue_card", label: "Issue card", status: "running" });
     if (!card) {
       logInfo("> No usable cached card; issuing a new card (charging USDT from wallet)...");
       const { issueCard } = await import("../shop/card-issuer.mjs");
@@ -188,6 +195,7 @@ export async function pay(opts) {
         orderNo = issued.orderNo;
         cardSource = "new";
       } catch (e) {
+        step({ evt: "step", id: "issue_card", label: "Issue card", status: "failed", note: e.code || "CARD_ISSUE_FAILED" });
         // 分级降级：钱包不足/缺 gas/未配置 → 明确指引下一步
         const hint = {
           INSUFFICIENT_USDT: "Insufficient USDT in wallet. Please fund the wallet first: aicard topup --amount <n>",
@@ -204,6 +212,7 @@ export async function pay(opts) {
     } else {
       logInfo(`> Using cached card •••• ${String(card.number).slice(-4)} (face $${card.amount}); paying directly, wallet untouched.`);
     }
+    step({ evt: "step", id: "issue_card", label: "Issue card", status: "done", note: cardSource === "new" ? `Issued new card •••• ${String(card.number).slice(-4)}` : `Reused cached card •••• ${String(card.number).slice(-4)}` });
 
     // 3. 填卡付款
     const address = {
@@ -229,6 +238,7 @@ export async function pay(opts) {
       waitOtpMs: opts.waitOtp ? Number(opts.waitOtp) : 0,
       otpFile: opts.otpFile,
       outDir: opts.out,
+      progressFile, // 收银台各步事件追加到此文件（实时流）
       onProgress: (m) => logInfo("> " + m),
     });
 
@@ -317,6 +327,15 @@ export async function pay(opts) {
           }
         : null;
 
+    // 终态步骤事件（收据）：收尾实时流，供 agent 呈现最终结果
+    step({
+      evt: "step",
+      id: "receipt",
+      label: "Receipt",
+      status: r.outcome === "success" ? "done" : "skipped",
+      ...(receipt?.orderNumber ? { note: `Order ${receipt.orderNumber}` } : { note: r.outcome }),
+    });
+
     // 下单流程时间线 HTML（自包含，Artifact 直显）。【安全】渲染器只嵌无卡面截图，
     // 填卡节点仅"已打码"占位，绝不内嵌 05-card-filled（含明文卡号/CVC）。
     let timelineHtmlPath = null;
@@ -326,6 +345,7 @@ export async function pay(opts) {
         const { renderOrderTimelineHtml } = await import("../shop/render.mjs");
         const html = await renderOrderTimelineHtml(r, receipt, {
           title: `Order flow — ${receipt?.merchant || (() => { try { return new URL(opts.continueUrl).host; } catch { return "checkout"; } })()}`,
+          card: { source: cardSource, last4: String(card.number).slice(-4), amount },
         });
         writeFileSync(opts.html, html);
         timelineHtmlPath = opts.html;
@@ -345,6 +365,7 @@ export async function pay(opts) {
       order: r.order,
       artifacts: r.artifacts,
       ...(timelineHtmlPath ? { timelineHtmlPath } : {}),
+      ...(progressFile ? { progressFile } : {}),
       signals: r.signals,
       ...(suggestion ? { suggestion } : {}),
     });
@@ -364,6 +385,44 @@ export async function cards() {
     emitOk("shop.cards", { count: list.length, usable: list.filter((c) => !c.used).length, cards: list });
   } catch (e) {
     emitErr("shop.cards", "SHOP_CARDS_FAILED", { message: e.message });
+  }
+}
+
+/**
+ * 读取实时步骤事件流（shop pay --progress-file 写的 JSONL），渲染成图文步骤视图。
+ * 供 agent 边 tail 边重复调用 → 刷新同一个 Artifact，实现"实时图文、AI 动态编排"。
+ * 【安全】渲染委托 renderStepStreamHtml：填卡步骤只打码占位、绝不嵌卡面截图。
+ */
+export async function steps(opts) {
+  try {
+    if (!opts.progressFile)
+      return emitErr("shop.steps", "MISSING_PROGRESS_FILE", { message: "Missing --progress-file (the JSONL written by `shop pay --progress-file`)" });
+    const { readFileSync, existsSync, writeFileSync } = await import("node:fs");
+    if (!existsSync(opts.progressFile))
+      return emitErr("shop.steps", "NO_EVENTS_YET", { message: "Progress file not created yet; the run may not have started.", progressFile: opts.progressFile });
+
+    const events = readFileSync(opts.progressFile, "utf8")
+      .split("\n").filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter((e) => e && e.evt === "step" && e.id);
+
+    let htmlPath = null;
+    if (opts.html) {
+      const { renderStepStreamHtml } = await import("../shop/render.mjs");
+      const html = await renderStepStreamHtml(events, { title: opts.title || "Order progress" });
+      writeFileSync(opts.html, html);
+      htmlPath = opts.html;
+    }
+
+    // 折叠为每步最新状态（首见顺序），回摘要供 agent 判断进度/是否结束
+    const latest = {}; const order = [];
+    for (const e of events) { if (!(e.id in latest)) order.push(e.id); latest[e.id] = e; }
+    const summary = order.map((id) => ({ id, label: latest[id].label, status: latest[id].status, note: latest[id].note || null }));
+    const terminal = order.includes("receipt") || summary.some((s) => s.status === "failed");
+
+    emitOk("shop.steps", { count: events.length, steps: summary, terminal, ...(htmlPath ? { htmlPath } : {}) });
+  } catch (e) {
+    emitErr("shop.steps", e.code || "SHOP_STEPS_FAILED", { message: e.message });
   }
 }
 

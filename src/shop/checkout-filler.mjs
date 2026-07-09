@@ -8,11 +8,35 @@
  *
  * playwright 为可选依赖，按需动态加载。
  */
-import { mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync, rmSync, appendFileSync } from "node:fs";
 import { resolve as pathResolve, join as pathJoin } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { COUNTRY_CODES } from "./country-data.mjs";
+
+// 收银台截图 tag → 结构化步骤事件（供 agent 实时逐步感知）。截图即阶段真值，故事件由 shot() 顺带派生，
+// 一处集中、与实际流程天然同步。【安全】masked 步骤（填卡）不带截图路径——含明文卡号/CVC，绝不外泄给呈现层。
+const STEP_EVENTS = {
+  "01-open":                  { id: "open_checkout", label: "Open checkout",     status: "done" },
+  "01b-unavailable":          { id: "open_checkout", label: "Open checkout",     status: "failed" },
+  "01c-bot-blocked":          { id: "open_checkout", label: "Open checkout",     status: "failed" },
+  "02-address":               { id: "fill_address",  label: "Fill address",      status: "done" },
+  "02b-address-error":        { id: "fill_address",  label: "Fill address",      status: "failed" },
+  "03-shipping":              { id: "shipping",      label: "Shipping method",   status: "done" },
+  "03b-shipping-unavailable": { id: "shipping",      label: "Shipping method",   status: "failed" },
+  "05-card-filled":           { id: "fill_card",     label: "Fill card details", status: "done",   masked: true },
+  "05b-refill-failed":        { id: "fill_card",     label: "Fill card details", status: "failed", masked: true },
+  "05c-shipping-not-ready":   { id: "shipping",      label: "Shipping method",   status: "failed" },
+  "06-after-pay":             { id: "submit",        label: "Submit payment",    status: "running" },
+  "07-challenge":             { id: "verify",        label: "3DS / verification", status: "pending" },
+  "08-after-challenge":       { id: "submit",        label: "Submit payment",    status: "done" },
+};
+
+/** 追加一条结构化事件到 progress 文件（JSONL）；无文件或写失败均静默。供 agent 实时 tail 逐步呈现。 */
+export function appendStepEvent(progressFile, event) {
+  if (!progressFile) return;
+  try { appendFileSync(progressFile, JSON.stringify({ ...event, ts: Date.now() }) + "\n"); } catch { /* 非致命 */ }
+}
 
 export class FillError extends Error {
   constructor(code, message) {
@@ -72,8 +96,18 @@ export async function fillCheckout(p) {
   const otpFile = pathResolve(p.otpFile || "/tmp/aicard-otp.txt");
   const waitOtpMs = Number(p.waitOtpMs || 0);
   const log = p.onProgress || (() => {});
+  // 实时步骤事件流：每步真实发生时写一条 JSONL 到 progressFile，供 agent 后台 tail 逐步呈现（AI 动态编排，非写死模板）。
+  const progressFile = p.progressFile ? pathResolve(p.progressFile) : null;
+  const emitStep = (tag, shotPath) => {
+    const m = STEP_EVENTS[tag];
+    if (!m) return;
+    // masked 步骤（填卡）绝不带截图路径——含明文卡面
+    appendStepEvent(progressFile, m.masked ? { evt: "step", ...m } : { evt: "step", ...m, ...(shotPath ? { shot: shotPath } : {}) });
+  };
   mkdirSync(outDir, { recursive: true });
   if (existsSync(otpFile)) rmSync(otpFile);
+  // 注：progressFile 的重置由调用方（shop.mjs）负责——它在 checkout 之前还要先写 issue_card 事件，
+  // 若在此重置会冲掉那些前置事件。fillCheckout 只向其追加收银台各步事件。
 
   const A = p.address || {};
   const result = { outcome: null, signals: {}, artifacts: [], order: null };
@@ -142,6 +176,7 @@ export async function fillCheckout(p) {
     const path = pathResolve(outDir, `co-${tag}.png`);
     await page.screenshot({ path }).catch(() => {});
     result.artifacts.push(path);
+    emitStep(tag, path); // 顺带派生结构化步骤事件（实时流）
     return path;
   };
   const same = (a, b) => String(a).replace(/\s/g, "").toLowerCase() === String(b).replace(/\s/g, "").toLowerCase();

@@ -83,6 +83,33 @@ Each command module exports a single async function. Pattern: parse options → 
 
 **Gas Model**: One-time `approve` tx requires BNB (~0.0003). Card creation itself is gasless (server-paid). Withdrawal requires BNB for direct on-chain transfer.
 
+## 开发规范 (Development Conventions)
+
+> 这些是从实际返工中沉淀的硬规则，改代码前先读，避免重复踩坑。
+
+### 1. 富展示 / 步骤呈现：AI 动态驱动，不写死
+购物流程的可视化（选品→详情→下单→开卡→打开收银台→填地址→填卡→提交→收据）**分工必须是**：
+- **代码只提供"可感知的素材"**：可靠且结构化的数据（截图、`outcome`、结构化 step 事件、收据字段），以及**可选**的渲染助手（`src/shop/render.mjs`）。
+- **AI（agent）动态编排呈现**：拿实时事件/数据，自行决定如何让用户感知每一步（文字清单 / 逐步更新的 Artifact），并随实际结果（失败在哪步、要不要 3DS、是否缓存卡）灵活调整。
+- **禁止**在代码里把"步骤序列 / 呈现模板"钉死成固定流水线。步骤是**灵活涌现**的，不是常量数组。渲染助手可作兜底，但不得成为唯一/强制路径。
+- **实时感知机制**：长流程（如 `shop pay`）以**事件流**（结构化 JSONL 写 progress 文件）实时吐每步进展，agent 后台跑 + tail 逐步呈现；不要做成"一次同步黑盒、跑完才一次性返回"。
+
+### 2. 卡面 PII 安全红线（不可妥协）
+- 完整卡号 / CVV / 有效期**绝不**出现在 stdout、日志、envelope、或任何可分享产物（Artifact / 截图嵌入）中；仅允许显示**末 4 位**。
+- 收银台填卡截图（`co-05-card-filled*`）含**明文卡号/CVC**，**绝不内嵌**任何 HTML/Artifact；填卡步骤一律"masked"占位。渲染器已强制排除，勿绕过。
+
+### 3. 链上交易的 gasPrice
+- 本项目 RPC 是**私有交易节点**，拒收 EIP-1559 零费率交易（`require GasPrice=50000000`）。凡**本地签名、直接上链**的交易（approve / withdraw）**必须显式设 legacy `gasPrice`**。
+- 取值方式：**动态** `getGasPrice()` × 共享常量 `GAS_PRICE_BUFFER`(=120n)/100n（+20% buffer）。**不写死绝对下限**——gasPrice 随行就市，靠 buffer 覆盖波动。
+- 发卡本身是 gasless（服务端上链），不受此约束。
+
+### 4. 不写死环境假设 / 用动态值
+- 不写死时区（用系统真实时区，指纹最自洽）；`locale:"en-US"` 是**功能性归一**（强制收银台英文以匹配选择器），属例外并已注释说明。
+- 金额取**服务端权威值**（如开卡 `req.amountUsdt` 已含 10% 费），据此算精确差额自动补足，**不让用户凭面额猜、二次充值**（见 `wc-topup.mjs` + `card-issuer.mjs` autoFund）。
+
+### 5. 命令必须能自然退出
+WalletConnect 会开着 relay WebSocket + heartbeat 占住事件循环。WC 相关命令跑完后进程要能退出（`bin/cli.mjs` 用 `parseAsync().then(exit)` 兜成功路径，`emitErr` 各自 exit）；新增长驻资源时注意收尾关闭。
+
 ## Key Dependencies
 - `viem` — EVM client (balance queries, contract reads)
 - `@walletconnect/sign-client` — Wallet connection protocol
