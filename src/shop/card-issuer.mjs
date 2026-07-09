@@ -5,9 +5,9 @@
  * 直接交给 CheckoutFiller，并缓存到本地卡列表（cards.mjs）供后续购物复用。
  * 卡面不经过 CLI stdout、不写日志、不入 sanitize。
  *
- * 前置：本地会话钱包需已有足够 USDT + 首次 approve 授权。
- * 本模块不触发 WalletConnect 交互充值（那是 `aicard create` 的前台交互流程）；
- * 余额/授权不足则报错，提示用户先 `aicard topup` / `aicard create` 完成充值与授权。
+ * 前置：本地会话钱包需已有首次 approve 授权（无授权则报错，引导先 `aicard create`）。
+ * USDT 不足时：autoFund=true 走 WalletConnect 自动补足差额（差额=本次含开卡费的 req.amountUsdt−余额，
+ * 服务端权威金额，杜绝凭面额少充/二次充值）；autoFund=false 则报错提示先 `aicard topup`。
  */
 import axios from "axios";
 import { createX402Api, fetchPaymentRequirements } from "../x402.mjs";
@@ -15,6 +15,9 @@ import { getWalletBalance, getAllowance } from "../balance.mjs";
 import { resolve } from "../config.mjs";
 import { MIN_AMOUNT, MAX_AMOUNT, POLL_INTERVAL, MAX_POLLS } from "../constants.mjs";
 import { extractCard, addCard } from "./cards.mjs";
+import { inlineWalletConnectTopup } from "../wc-topup.mjs";
+import { WalletConnectError } from "../walletconnect.mjs";
+import { logInfo } from "../output.mjs";
 
 export class CardError extends Error {
   constructor(code, message, extra = {}) {
@@ -31,6 +34,7 @@ export class CardError extends Error {
  * @param {string} [p.appId="TEST000001"]
  * @param {string} [p.serviceUrl]
  * @param {string} [p.privateKey]
+ * @param {boolean} [p.autoFund=false] - USDT 不足时是否经 WalletConnect 自动补足差额（shop pay 用 true）
  * @returns {Promise<{orderNo:string, card:{number,expiry,cvc,name,scheme}, amount:number}>}
  */
 export async function issueCard(p) {
@@ -48,13 +52,34 @@ export async function issueCard(p) {
   // 1. 取 x402 付款要求
   const req = await fetchPaymentRequirements(url);
 
-  // 2. 余额 / 授权检查（不足即报错，不做交互充值）
+  // 2. 余额 / 授权检查
   const { address, usdt, bnbRaw } = await getWalletBalance(privateKey);
-  if (parseFloat(usdt) < req.amountUsdt)
-    throw new CardError("INSUFFICIENT_USDT", `Insufficient USDT: need ${req.amountUsdt}, currently have ${usdt}. Please run aicard topup first.`, { required: req.amountUsdt, available: usdt });
   const allowance = await getAllowance(address);
   if (allowance < BigInt(req.amountWei) && bnbRaw === 0n)
     throw new CardError("NEEDS_APPROVE_GAS", "An approve authorization is required but the local wallet has no BNB. Please run aicard gas first, or use aicard create to complete the initial authorization.");
+
+  // USDT 不足：
+  //  - autoFund：直接补足差额。差额取自【本次】含开卡费的 req.amountUsdt（服务端权威金额，
+  //    非面额，杜绝用户凭面额少充、被迫二次充值）。一次 WalletConnect 确认即可继续下单。
+  //  - 非 autoFund：保持原行为，报错让用户先手动 topup。
+  if (parseFloat(usdt) < req.amountUsdt) {
+    if (!p.autoFund)
+      throw new CardError("INSUFFICIENT_USDT", `Insufficient USDT: need ${req.amountUsdt}, currently have ${usdt}. Please run aicard topup first.`, { required: req.amountUsdt, available: usdt });
+
+    const shortfall = req.amountUsdt - parseFloat(usdt);
+    logInfo(`> USDT short by ${shortfall.toFixed(6)} (need ${req.amountUsdt}, have ${usdt}); auto-funding the exact shortfall via WalletConnect...`);
+    try {
+      await inlineWalletConnectTopup({ sessionAddress: address, amount: shortfall.toFixed(6), needGas: false });
+    } catch (e) {
+      if (e instanceof WalletConnectError) throw new CardError(e.code, e.message);
+      throw new CardError("TOPUP_FAILED", `Auto top-up failed: ${e.message}`);
+    }
+
+    // 补足后按同一 req 复核，仍不足则报错（不再自动重试，避免重复充值）
+    const fresh = await getWalletBalance(privateKey);
+    if (parseFloat(fresh.usdt) < req.amountUsdt)
+      throw new CardError("INSUFFICIENT_USDT", `Still insufficient USDT after funding: need ${req.amountUsdt}, currently have ${fresh.usdt}.`, { required: req.amountUsdt, available: fresh.usdt });
+  }
 
   // 3. 手动签名并提交（沿用第一次的精确金额，避免二次请求金额漂移）
   const { client } = createX402Api(privateKey);

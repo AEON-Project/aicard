@@ -169,7 +169,7 @@ export async function pay(opts) {
       logInfo("> No usable cached card; issuing a new card (charging USDT from wallet)...");
       const { issueCard } = await import("../shop/card-issuer.mjs");
       try {
-        const issued = await issueCard({ amount, appId: opts.appId, serviceUrl: opts.serviceUrl, privateKey: opts.privateKey });
+        const issued = await issueCard({ amount, appId: opts.appId, serviceUrl: opts.serviceUrl, privateKey: opts.privateKey, autoFund: true });
         card = issued.card;
         orderNo = issued.orderNo;
         cardSource = "new";

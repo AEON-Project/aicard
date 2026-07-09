@@ -3,20 +3,10 @@ import { resolve } from "../config.mjs";
 import { getWalletBalance, getAllowance } from "../balance.mjs";
 import { sanitizeOutput } from "../sanitize.mjs";
 import axios from "axios";
-import {
-  MIN_AMOUNT, MAX_AMOUNT, POLL_INTERVAL, MAX_POLLS,
-  BSC_RPC_URL, USDT_BSC,
-} from "../constants.mjs";
-import {
-  withWallet,
-  requestERC20Transfer,
-  requestNativeTransfer,
-  setStatus,
-  WalletConnectError,
-} from "../walletconnect.mjs";
+import { MIN_AMOUNT, MAX_AMOUNT, POLL_INTERVAL, MAX_POLLS } from "../constants.mjs";
+import { WalletConnectError } from "../walletconnect.mjs";
+import { inlineWalletConnectTopup } from "../wc-topup.mjs";
 import { emitOk, emitErr, logInfo } from "../output.mjs";
-
-const AUTO_GAS_BNB = "0.0003";
 
 export async function create(opts) {
   logInfo("Creating Agent Card...");
@@ -283,89 +273,6 @@ export async function create(opts) {
       data: error.response?.data,
     });
   }
-}
-
-/**
- * 内联 WalletConnect 充值：在 create 流程内自动完成 USDT + BNB 充值
- */
-async function inlineWalletConnectTopup({ sessionAddress, amount, needGas }) {
-  // 页面展示：有 USDT 转账时显示 USDT 金额，仅 BNB gas 时显示 BNB 金额
-  const pageAmount = amount || (needGas ? AUTO_GAS_BNB : null);
-  const pageToken = amount ? "USDT" : "BNB";
-  // 需要 gas 且有 USDT 转账时，页面额外显示 Gas Amount 行
-  const pageGasAmount = (needGas && amount) ? AUTO_GAS_BNB : null;
-  await withWallet({ amount: pageAmount, token: pageToken, gasAmount: pageGasAmount }, async ({ signClient, session, peerAddress }) => {
-    const { createPublicClient, http } = await import("viem");
-    const { bsc } = await import("viem/chains");
-    const publicClient = createPublicClient({
-      chain: bsc,
-      transport: http(BSC_RPC_URL, { timeout: 15000, retryCount: 2 }),
-    });
-
-    // USDT 充值
-    if (amount) {
-      setStatus("signing", { amount, token: "USDT", to: sessionAddress });
-      logInfo(`\nRequesting USDT transfer: ${amount} USDT → ${sessionAddress}`);
-      logInfo("Please confirm the transaction in your wallet app...");
-
-      const usdtTxHash = await requestERC20Transfer(signClient, session, {
-        from: peerAddress,
-        to: sessionAddress,
-        token: USDT_BSC,
-        amount,
-        decimals: 18,
-      });
-      setStatus("tx_submitted", { txHash: usdtTxHash, amount, token: "USDT" });
-      logInfo(`USDT transfer submitted: ${usdtTxHash}`);
-      logInfo("Waiting for confirmation...");
-
-      const receipt = await publicClient.waitForTransactionReceipt({
-        hash: usdtTxHash,
-        timeout: 60_000,
-      });
-      if (receipt.status !== "success") {
-        throw new Error("USDT transfer transaction reverted");
-      }
-      logInfo("USDT transfer confirmed.");
-    }
-
-    // BNB gas 充值
-    if (needGas) {
-      // 检查 WC session 是否仍然存活
-      try {
-        const activeSessions = signClient.session.getAll();
-        const sessionAlive = activeSessions.some(s => s.topic === session.topic);
-        logInfo(`[WC session] alive=${sessionAlive}, topic=${session.topic}, active_sessions=${activeSessions.length}`);
-        if (!sessionAlive) {
-          throw new Error("WalletConnect session expired between USDT and BNB transfers. Run 'aicard gas' to add BNB manually.");
-        }
-      } catch (e) {
-        if (e.message.includes("session expired")) throw e;
-        logInfo(`[WC session] health check error: ${e.message}`);
-      }
-
-      setStatus("signing", { amount: AUTO_GAS_BNB, token: "BNB", to: sessionAddress });
-      logInfo(`\nRequesting BNB transfer: ${AUTO_GAS_BNB} BNB → ${sessionAddress} (for approve gas)`);
-      logInfo("Please confirm the transaction in your wallet app...");
-      const bnbTxHash = await requestNativeTransfer(signClient, session, {
-        from: peerAddress,
-        to: sessionAddress,
-        value: AUTO_GAS_BNB,
-      });
-      setStatus("tx_submitted", { txHash: bnbTxHash, amount: AUTO_GAS_BNB, token: "BNB" });
-      logInfo(`BNB transfer submitted: ${bnbTxHash}`);
-      const bnbReceipt = await publicClient.waitForTransactionReceipt({
-        hash: bnbTxHash,
-        timeout: 60_000,
-      });
-      if (bnbReceipt.status !== "success") {
-        throw new Error("BNB transfer reverted");
-      }
-      logInfo("BNB transfer confirmed.");
-    }
-
-    setStatus("confirmed", { token: amount ? "USDT" : "BNB" });
-  });
 }
 
 async function pollStatus(serviceUrl, orderNo) {
