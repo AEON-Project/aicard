@@ -7,7 +7,7 @@ import { toClientEvmSigner } from "@aeon-ai-pay/evm";
 import { privateKeyToAccount } from "viem/accounts";
 import { createWalletClient, http, publicActions, formatUnits } from "viem";
 import { bsc } from "viem/chains";
-import { BSC_RPC_URL } from "./constants.mjs";
+import { BSC_RPC_URL, GAS_PRICE_BUFFER } from "./constants.mjs";
 import axios from "axios";
 
 /**
@@ -28,8 +28,12 @@ export function createX402Api(privateKey) {
     signTypedData: (message) => evmAccount.signTypedData(message),
     readContract: (args) =>
       walletClient.readContract({ ...args, args: args.args || [] }),
-    sendTransaction: (args) =>
-      walletClient.sendTransaction({ to: args.to, data: args.data }),
+    sendTransaction: async (args) => {
+      // 显式设 legacy gasPrice：不设则 viem 走 EIP-1559，本 RPC（私有交易节点）会把费率估成 0
+      // 而拒收（require GasPrice=50000000）。此路径用于 approve 授权交易。动态取链上价 + buffer。
+      const gasPrice = (await walletClient.getGasPrice()) * GAS_PRICE_BUFFER / 100n;
+      return walletClient.sendTransaction({ to: args.to, data: args.data, gasPrice });
+    },
     waitForTransactionReceipt: (args) =>
       walletClient.waitForTransactionReceipt(args),
   });

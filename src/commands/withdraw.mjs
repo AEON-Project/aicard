@@ -6,13 +6,10 @@ import { privateKeyToAccount } from "viem/accounts";
 import { bsc } from "viem/chains";
 import { loadConfig } from "../config.mjs";
 import { getBalanceByAddress } from "../balance.mjs";
-import { BSC_RPC_URL, USDT_BSC, ERC20_TRANSFER_ABI } from "../constants.mjs";
+import { BSC_RPC_URL, USDT_BSC, ERC20_TRANSFER_ABI, GAS_PRICE_BUFFER } from "../constants.mjs";
 import { emitOk, emitErr, logInfo } from "../output.mjs";
 
 const BNB_TRANSFER_GAS = 21000n;
-// gas price 上浮系数：动态取链上 gasPrice 后再乘此系数（+20% buffer），应对取值到上链间的波动，
-// 并确保高于私有交易节点的最低 GasPrice 要求。不写死绝对下限（gasPrice 本身随行就市）。
-const GAS_PRICE_BUFFER = 120n; // 分母 100n
 
 export async function withdraw(opts) {
   logInfo("Reclaiming funds...");
