@@ -424,16 +424,20 @@ aicard shop search --query "<natural language>" [--country US] [--max-price 50] 
 
 > 💰 **Want the cheapest**: `--sort price` returns results sorted by ascending price (`data.sortedBy:"price"`); take `products[0]`. Note it ranks the cheapest **within the current result set** (the top N Shopify returns by relevance), not the absolute lowest across the entire web; to widen the candidate pool, increase `--limit` (e.g. 30) or combine it with `--max-price`.
 
-**Present results as a markdown table** (renders cleanly in the client, good density):
+**Present results as an image+text Artifact — this is the DEFAULT, do it proactively (don't wait for the user to ask for images).** Whenever you have an Artifact/canvas capability (Claude Desktop, claude.ai, any host with the Artifact tool), the visual grid is the default presentation, not an optional add-on:
+
+1. Run search **with `--html`** (always include it): `aicard shop search --query "…" [--country/--max-price/…] --html /tmp/aicard-search.html`
+2. **Read that file and publish it as an Artifact.** It's self-contained (images embedded as data URIs, no external fetches) and the cards are **clickable** — clicking one sends "Buy item #N: …" back so the user can pick by clicking (if the click is a no-op in this host, the number reply still works).
+3. Prompt: "Reply with the number (or click a card) to select the product". Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
+
+**Markdown table = fallback only** — use it *only* when you genuinely cannot publish an Artifact (a plain text-only terminal, or the user explicitly asked for text). Do not default to the table when an Artifact is available.
 
 | # | Product | Price | Merchant |
 |---|------|------|------|
 | 1 | {title} | ${priceMin} | {merchantName or merchantDomain} |
 | 2 | … | … | … |
 
-Then prompt: "Reply with the number to select the product you want to buy". Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
-
-**Rich visual (recommended in Artifact-capable clients — Claude Desktop / web):** add `--html <path>`; the CLI writes a self-contained image-and-text product-card grid (images embedded, no external fetches). **Publish that file as an Artifact** so the user browses products visually. The cards are **clickable** — clicking one sends "Buy item #N: …" back to the conversation, so the user can pick by clicking instead of typing a number (non-Artifact clients just ignore the click; the number reply still works). Fall back to the markdown table when the client can't render Artifacts. See [Rich Visual Presentation](#rich-visual-presentation-artifacts).
+See [Rich Visual Presentation](#rich-visual-presentation-artifacts).
 
 ### 5.1b Product detail & pick options (after selecting a product, don't go straight to the cart)
 
@@ -445,7 +449,7 @@ aicard shop product --id <productId> [--html <path>]
 # Only when the previous step was a single-store search `shop search --shop <domain>` should you also add --shop <domain> here.
 ```
 
-**Rich visual (recommended in Artifact-capable clients):** add `--html <path>` to write a self-contained product-detail card (large image + price + spec table); **publish it as an Artifact**. The card is clickable — clicking it sends "Buy …" back to confirm.
+**Rich visual (DEFAULT — publish proactively):** always add `--html <path>` to write a self-contained product-detail card (large image + price + spec table) and **publish it as an Artifact**; only skip when you can't render Artifacts. The card is clickable — clicking it sends "Buy …" back to confirm.
 
 Present (consumer-facing detail, not a bare dump):
 - Title + price + a one-line selling point (from `specText`)
@@ -595,7 +599,7 @@ Requires a Token-tier credential (`read_global_api_orders`). **⚠️ Can only q
 
 ### Rich Visual Presentation (Artifacts)
 
-In **Artifact-capable clients (Claude Desktop / web)**, make the shopping flow visual and intuitive — at each stage the CLI produces a self-contained HTML page you **publish as an Artifact**. This is the recommended default there; fall back to markdown tables/text when the client can't render Artifacts.
+Whenever you have an Artifact/canvas capability (**Claude Desktop, claude.ai, any host with the Artifact tool**), making the shopping flow visual is the **DEFAULT — do it proactively at every stage, without being asked**. At each stage the CLI produces a self-contained HTML page you **publish as an Artifact**. Only drop to markdown tables/text when you genuinely cannot render an Artifact.
 
 | Stage | Command | What it renders |
 |------|--------|-----------------|
@@ -624,7 +628,7 @@ Rules:
 1. **Publish, don't paste** — read the generated file and render it as an Artifact (it's fully self-contained: images embedded as data URIs, no external fetches, so it displays under the Artifact CSP). Keep one Artifact per stage; reuse/redeploy rather than spawning many.
 2. **Clickable cards need a client that can send prompts back** (Claude Desktop). Elsewhere the click is a no-op and the user picks by replying a number — always keep that textual path working.
 3. 🔒 **Card safety is non-negotiable.** The order timeline renderer embeds only non-card screenshots and shows the card-entry step as a **masked placeholder** — the raw card-entry screenshot (full PAN/CVC visible) is **never** embedded. Never paste a card-entry screenshot, full card number, or CVC into the chat or an Artifact yourself. Only the last 4 digits may be shown.
-4. **Optional, not required** — if the user is on a plain terminal client or explicitly prefers text, skip the Artifacts; the table/text flow is always valid.
+4. **Fallback rule (not an opt-out)** — the Artifact is the default; only fall back to the table/text flow when you truly cannot publish an Artifact (text-only terminal) or the user explicitly asked for text. "The user didn't ask for images" is **not** a reason to skip it — make it visual by default.
 
 ---
 
