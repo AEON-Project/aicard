@@ -228,4 +228,15 @@ shop
     return cards();
   });
 
-program.parse();
+// 用 parseAsync 拿到 action 的 promise，命令跑完后强制退出。
+// 背景：WalletConnect 会开着 relay WebSocket + heartbeat 定时器等后台 handle，
+// 事件循环无法自然清空，成功路径若只靠 emitOk 自然返回，进程会挂到超时才被杀。
+// emitErr 自身已 process.exit（保留各命令退出码），故这里只兜成功路径（exit 0）。
+// 结果已在 action 内经 console.log 同步写出，此时退出不会截断 stdout。
+program.parseAsync().then(
+  () => process.exit(process.exitCode ?? 0),
+  (err) => {
+    console.error(err);
+    process.exit(1);
+  }
+);

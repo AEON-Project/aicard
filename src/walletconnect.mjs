@@ -665,6 +665,12 @@ export async function withWallet(opts, fn) {
           )
         );
       } catch {}
+      // 关闭底层 relay WebSocket：仅断开 session/pairing 不会关传输层，
+      // 常开的 socket + 心跳定时器会一直占住 Node 事件循环，导致命令打印完结果后
+      // 进程迟迟不退出、干等到超时。显式关闭传输层后事件循环无残留 handle，进程立即退出。
+      try {
+        await signClient.core.relayer.transportClose();
+      } catch {}
     }
   }
 
