@@ -10,6 +10,9 @@ import { BSC_RPC_URL, USDT_BSC, ERC20_TRANSFER_ABI } from "../constants.mjs";
 import { emitOk, emitErr, logInfo } from "../output.mjs";
 
 const BNB_TRANSFER_GAS = 21000n;
+// gasPrice 下限：BSC RPC（QuickNode 私有交易节点）实测要求 ≥ 50000000（0.05 gwei）；取 0.1 gwei 稳妥兜底，
+// 兼顾 getGasPrice 偶发返回 0 的情况。链上实际 gasPrice 更高时按实际走。
+const MIN_GAS_PRICE = 100_000_000n; // 0.1 gwei
 
 export async function withdraw(opts) {
   logInfo("Reclaiming funds...");
@@ -94,7 +97,11 @@ export async function withdraw(opts) {
       });
 
       logInfo(`\nTransferring ${formatUnits(withdrawAmount, 18)} USDT → ${mainWallet}...`);
-      usdtTxHash = await walletClient.sendTransaction({ to: USDT_BSC, data });
+      // 显式设 legacy gasPrice：不设则 viem 走 EIP-1559，本 RPC（QuickNode 私有交易节点）常把费率估成 0，
+      // 交易被拒（require GasPrice=50000000）。取链上 gasPrice，并设不低于节点最低要求的下限（0.05 gwei）。
+      const rawGp = await publicClient.getGasPrice();
+      const gasPrice = rawGp > MIN_GAS_PRICE ? rawGp : MIN_GAS_PRICE;
+      usdtTxHash = await walletClient.sendTransaction({ to: USDT_BSC, data, gasPrice });
       logInfo(`USDT tx: ${usdtTxHash}`);
 
       const receipt = await publicClient.waitForTransactionReceipt({
@@ -121,7 +128,8 @@ export async function withdraw(opts) {
 
     if (freshBalance.bnbRaw > 0n) {
       try {
-        const gasPrice = await publicClient.getGasPrice();
+        const rawGp = await publicClient.getGasPrice();
+        const gasPrice = rawGp > MIN_GAS_PRICE ? rawGp : MIN_GAS_PRICE; // 同样设下限，满足私有交易节点最低 GasPrice
         // 预留 20% buffer 应对 gas price 波动
         const gasCost = BNB_TRANSFER_GAS * (gasPrice * 120n / 100n);
         const sendable = freshBalance.bnbRaw - gasCost;
