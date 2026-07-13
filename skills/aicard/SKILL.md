@@ -424,11 +424,13 @@ aicard shop search --query "<natural language>" [--country US] [--max-price 50] 
 
 > 💰 **Want the cheapest**: `--sort price` returns results sorted by ascending price (`data.sortedBy:"price"`); take `products[0]`. Note it ranks the cheapest **within the current result set** (the top N Shopify returns by relevance), not the absolute lowest across the entire web; to widen the candidate pool, increase `--limit` (e.g. 30) or combine it with `--max-price`.
 
-**Present results as an image+text Artifact — this is the DEFAULT, do it proactively (don't wait for the user to ask for images).** Whenever you have an Artifact/canvas capability (Claude Desktop, claude.ai, any host with the Artifact tool), the visual grid is the default presentation, not an optional add-on:
+**Present results as a visual, proactively (don't wait for the user to ask for images).** The **inline image is the primary, always-visible presentation** — an Artifact alone is not enough because it often shows as a *collapsed card the user must click*, so the grid stays hidden (this is the "why can't I see the image?" trap). Do this, in order:
 
-1. Run search **with `--html`** (always include it): `aicard shop search --query "…" [--country/--max-price/…] --html /tmp/aicard-search.html`
-2. **Read that file and publish it as an Artifact.** It's self-contained (images embedded as data URIs, no external fetches) and the cards are **clickable** — clicking one sends "Buy item #N: …" back so the user can pick by clicking (if the click is a no-op in this host, the number reply still works).
-3. Prompt: "Reply with the number (or click the card to open it) to select the product". Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
+1. Run search with **both** `--image` and `--html`:
+   `aicard shop search --query "…" [--country/--max-price/…] --image /tmp/aicard-search.png --html /tmp/aicard-search.html`
+2. **FIRST, display the `--image` PNG inline** (read/show it in your reply). This is what the user actually sees — the grid appears immediately, zero clicks. **Never skip this** — if you only publish the Artifact, the user sees a blank collapsed card and asks where the image went.
+3. *Then, optionally,* also publish the `--html` as an Artifact for click-to-pick interaction (it may render collapsed — that's fine, the inline image already showed the grid). If you have no Artifact tool, just skip this; the inline image stands alone.
+4. Prompt: "Reply with a number (or click a card) to pick one". Record the chosen product's `productId`, `merchantDomain`, `detailUrl`.
 
 **The image/card IS the presentation — do NOT also paste the full markdown table below it.** And **do NOT narrate the mechanism** (in any conversation language): never say things like "generated a visual card" / "made it into an Artifact" / "here's a preview image" / "published an Artifact" — that's plumbing talk and reads as unfriendly. Let the visual speak for itself and say only substance about the **products**, e.g. "Found 6 — #6 ($10.99) is the cheapest, #1 has the fullest specs", then "reply with a number, or click a card". (If the Artifact shows collapsed rather than auto-opening, that's the host client's behavior and cannot be forced — but don't turn that into narration either; the inline `--image` already shows the visual.)
 
@@ -446,12 +448,12 @@ See [Rich Visual Presentation](#rich-visual-presentation-artifacts).
 Fetch full details and show a **detail view**:
 
 ```bash
-aicard shop product --id <productId> [--html <path>]
+aicard shop product --id <productId> --image <png> [--html <html>]
 # ⚠️ Use the Global endpoint for Global search results (do not add --shop, otherwise gid://shopify/p/… will mismatch the storefront id and error out).
 # Only when the previous step was a single-store search `shop search --shop <domain>` should you also add --shop <domain> here.
 ```
 
-**Rich visual (DEFAULT — publish proactively):** always add `--html <path>` to write a self-contained product-detail card (large image + price + spec table) and **publish it as an Artifact**; only skip when you can't render Artifacts. The card is clickable — clicking it sends "Buy …" back to confirm.
+**Rich visual (same rule as search): inline image first.** Add `--image <png>` and **display the PNG inline** (large image + price + spec table) — this is the always-visible presentation, do it every time. *Optionally* also `--html` + publish as a clickable Artifact; skip if you can't render Artifacts. Don't narrate the mechanism — just show the card and talk about the product.
 
 Present (consumer-facing detail, not a bare dump):
 - Title + price + a one-line selling point (from `specText`)
@@ -470,8 +472,10 @@ First collect ship-to **country + postal code** (affects tax/shipping):
 > To check the exact total (incl. tax & shipping), what's your shipping country and postal/ZIP code?
 
 ```bash
-aicard shop cart --shop <merchantDomain> --variant <variantId> [--qty 1] --country US --zip 10001
+aicard shop cart --shop <merchantDomain> --variant <variantId> [--qty 1] --country US --zip 10001 --image /tmp/aicard-cart.png
 ```
+
+**Rich visual (same rule): inline image first.** Add `--image <png>` and **display the cart-summary PNG inline** (line items + subtotal/tax/shipping/total) — always-visible, no click. *Optionally* also `--html` + publish as an Artifact. Then give the confirmation prompt below. Don't narrate the mechanism.
 
 > ⚠️ **Test-store detection (important)**: if the `cart` response has `testBackend:true`, the merchant's checkout **backend is a test store** (e.g. `twinoakstest.myshopify.com`) — some merchants layer a custom domain (e.g. `naturallife.com`) over a test store, which you can't tell from the domain alone; only the backend host in `continueUrl` reveals it. **Placing such an order is not a real transaction.** When `shop pay` hits this it returns `TEST_STORE_BLOCKED` (this is a **confirmation gate, not a dead end**, `needsConfirm:true`). The correct approach: **tell the user "this merchant is a test store, the order is not a real transaction" and ask whether to continue**; if the user replies "continue", add `--allow-test` and re-run to proceed; if the user wants a different merchant, switch. Do not add `--allow-test` on your own, and do not just give up.
 
@@ -510,10 +514,10 @@ aicard shop pay \
   --continue-url "<continueUrl>" --amount <total> \
   --email <email> --first <First> --last <Last> \
   --address1 "<street>" --city "<City>" --zip <zip> --country "<Country>" \
-  [--phone <phone>] [--region "<State>"] [--html <path>]
+  [--phone <phone>] [--region "<State>"] --progress-file /tmp/aicard-steps.jsonl [--html <path>]
 ```
 
-**Rich visual (recommended in Artifact-capable clients):** add `--html <path>` — after the run the CLI writes a self-contained **order-flow timeline** (order summary with merchant / item / amount charged / `VISA •••• {last4}` / ship-to, plus a step-by-step screenshot strip). **Publish it as an Artifact.** 🔒 **Security is enforced by the renderer**: it embeds only non-card screenshots (open → address → shipping → thank-you); the **card-entry step is a "masked" placeholder — the raw card-entry screenshot (which shows the full PAN/CVC) is never embedded**. Never paste a card-entry screenshot into the chat yourself.
+**Rich visual: show the checkout ONE image per step (not one composite).** Run pay in the background with `--progress-file`, then surface each step's screenshot inline as it lands — see [Live step-by-step](#live-step-by-step--show-one-image-per-step-do-not-cram-into-a-single-tall-image). 🔒 The card-entry step has **no screenshot** (`masked:true`) — show a text line, never an image; the raw card-entry screenshot (full PAN/CVC) is never exposed. (`--html` still writes a single composite timeline you *may* publish as one scrollable Artifact summary, but the per-step inline images are the default experience — a single composite crams 9 steps into an unreadable strip.)
 
 - **The first purchase auto-downloads the browser engine**: `shop pay` depends on Playwright chromium (~150MB). When it detects it isn't downloaded, it **downloads it automatically and continues** (progress goes to stderr, first time only, reused thereafter); the first run therefore taking an extra minute or two is normal, not a hang. If the auto-download fails it returns `BROWSER_INSTALL_FAILED` — relay to the user to run `npx playwright install chromium` manually.
 - **If it returns `PLAYWRIGHT_MISSING`** (the playwright JS package itself isn't installed, usually because the optionalDependency silently failed during a global install): relay to the user to run once `npm i -g playwright && npx playwright install chromium`, then retry `shop pay`.
@@ -617,8 +621,8 @@ Every stage of the journey (**search → detail → cart → confirm → order**
 
 This skill runs on many hosts (Claude Code/Desktop, Cursor, Codex, Gemini CLI, Windsurf, …) with **different display abilities**. The `aicard` CLI is identical everywhere — it only writes files; **how you surface them is your call based on your host's capabilities.** Use this ladder, top-down, and stop at the first you can do:
 
-1. **You have an Artifact/canvas tool** (Claude Code / Desktop / claude.ai) → generate `--html` and **publish it as an Artifact** (interactive, clickable). Also generate `--image` and show it inline (auto-visible even before the panel opens).
-2. **No Artifact tool, but your host renders images inline** (many IDE chats) → generate `--image` and display the PNG inline. Skip `--html` publishing (you have nothing to publish it into).
+1. **Your host renders images inline** (Claude Code / Desktop / claude.ai / many IDE chats) → generate `--image` and **display the PNG inline FIRST** (this is the always-visible presentation). *Then, if* you also have an Artifact/canvas tool, additionally publish `--html` as a clickable Artifact — but the inline image is what the user sees, so never skip it (an Artifact alone often shows collapsed and hides the grid).
+2. **Host renders images but you have no Artifact tool** → just `--image` inline. Skip `--html` publishing (nothing to publish it into).
 3. **Text-only host** (headless terminal CLIs, plain shells) → **do NOT pass `--image`** (it launches a headless browser and, on first use, downloads ~150 MB of Chromium the user can't even see) and do NOT try to "publish an Artifact" (no such tool). Present the **markdown table / text** instead. This always works.
 
 Rule of thumb: **never invoke `--image` unless you can actually display an image to the user**, and **never claim to publish an Artifact unless you have that tool**. When unsure, the markdown table is the safe universal fallback. `--html` is cheap (no browser) so it's fine to also write it as a file the user can open in a browser, even on text hosts — just don't call it an "Artifact".
@@ -641,7 +645,7 @@ The purchase flow (`issue card → open checkout → fill address → shipping �
 So the user sees the checkout unfold **one image at a time** — each step a full, legible image — instead of one cramped composite. (The `--html`/`--image` composite timeline still exists for a single scrollable Artifact/summary if you want it, but the per-step images are the default live experience.) **You** decide cadence and wording; the CLI only supplies reliable per-step screenshots + events.
 
 Rules:
-1. **Show the inline image AND publish the Artifact (both).** The `--image` PNG is the **auto-visible** part — display it inline (e.g. read it) so the user sees the visual immediately with zero clicks (whether an Artifact panel auto-opens is the host client's call and cannot be forced). The `--html` file, published as an Artifact, adds click-interaction / the right-side panel. Keep one Artifact per stage; reuse/redeploy rather than spawning many. Do **not** also paste a big markdown table alongside — the image/card is the presentation. **Never narrate the rendering mechanism** at any stage, in any language — no "generated a visual card / made an Artifact / here's a preview image / published an Artifact". Just show the visual and speak plain substance about the products/cart/order. Plumbing talk reads as unfriendly.
+1. **Inline image first; Artifact is a secondary bonus.** Always display the `--image` PNG inline — it's the **auto-visible** presentation the user actually sees, zero clicks. **Never rely on the Artifact alone**: an Artifact panel frequently shows as a collapsed card the user must click, so the visual stays hidden ("where's the image?"). Publishing the `--html` Artifact is optional and additive (click-interaction / right-side panel) — do it only if you have the tool, after the inline image. Keep one Artifact per stage; reuse/redeploy rather than spawning many. Do **not** also paste a big markdown table alongside — the image/card is the presentation. **Never narrate the rendering mechanism** at any stage, in any language — no "generated a visual card / made an Artifact / here's a preview image / published an Artifact". Just show the visual and speak plain substance about the products/cart/order. Plumbing talk reads as unfriendly.
 2. **Clickable cards need a client that can send prompts back** (Claude Desktop). Elsewhere the click is a no-op and the user picks by replying a number — always keep that textual path working. The inline image is never clickable; that's fine, it's for at-a-glance viewing.
 3. 🔒 **Card safety is non-negotiable.** The order timeline renderer embeds only non-card screenshots and shows the card-entry step as a **masked placeholder** — the raw card-entry screenshot (full PAN/CVC visible) is **never** embedded. Never paste a card-entry screenshot, full card number, or CVC into the chat or an Artifact yourself. Only the last 4 digits may be shown.
 4. **Fallback rule (not an opt-out)** — the Artifact is the default; only fall back to the table/text flow when you truly cannot publish an Artifact (text-only terminal) or the user explicitly asked for text. "The user didn't ask for images" is **not** a reason to skip it — make it visual by default.
