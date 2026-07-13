@@ -330,7 +330,7 @@ function stepRowHtml(s, i) {
 // 步骤器 CSS（timeline 与实时流共用，视觉一致）
 const STEPPER_CSS = `
   .steps { display: flex; flex-direction: column; gap: 0; }
-  .step { position: relative; display: grid; grid-template-columns: 34px 120px 1fr; align-items: center; gap: 14px; padding: 12px 0; border-left: 2px solid #ececec; margin-left: 16px; padding-left: 20px; }
+  .step { position: relative; display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 14px; padding: 12px 0; border-left: 2px solid #ececec; margin-left: 16px; padding-left: 28px; }
   .step:last-child { border-left-color: transparent; }
   .stepno { position: absolute; left: -15px; width: 28px; height: 28px; border-radius: 50%; background: #111; color: #fff; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
   .step.failed .stepno { background: #c0392b; }
@@ -350,7 +350,7 @@ const STEPPER_CSS = `
   .badge.failed { background: #fdecea; color: #c0392b; }
   .badge.pending, .badge.running { background: #fff4e0; color: #d08700; }
   .badge.skipped { background: #f0f0f0; color: #999; }
-  @media (max-width: 560px){ .step { grid-template-columns: 28px 1fr; } .shot { display: none; } }`;
+  @media (max-width: 560px){ .step { grid-template-columns: 1fr; } .shot { display: none; } }`;
 
 /**
  * 渲染下单流程为 6 个独立命名步骤：开卡→打开收银台→填写地址→填写卡信息→提交→收据。
