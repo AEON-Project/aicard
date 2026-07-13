@@ -623,22 +623,22 @@ This skill runs on many hosts (Claude Code/Desktop, Cursor, Codex, Gemini CLI, W
 
 Rule of thumb: **never invoke `--image` unless you can actually display an image to the user**, and **never claim to publish an Artifact unless you have that tool**. When unsure, the markdown table is the safe universal fallback. `--html` is cheap (no browser) so it's fine to also write it as a file the user can open in a browser, even on text hosts — just don't call it an "Artifact".
 
-#### Live step-by-step (real-time, image+text)
+#### Live step-by-step — show one image per step (do NOT cram into a single tall image)
 
-The purchase flow (`issue card → open checkout → fill address → shipping → fill card → submit → receipt`) previously returned only at the end. To let the user **perceive each step live** — and to keep the presentation **AI-dynamic, not a fixed template** — drive it yourself from an event stream:
+The purchase flow (`issue card → open checkout → fill address → shipping → fill card → submit → receipt`) previously returned only at the end. Present it as **one clean image per step, shown one at a time** as steps land — **not** as a single composite timeline PNG (that stacks 9 steps into a tall, unreadable strip).
 
-1. Run pay in the **background** with a progress file (and the final timeline):
+1. Run pay in the **background** with a progress file:
    ```bash
    aicard shop pay … --progress-file /tmp/aicard-steps.jsonl --html /tmp/aicard-order.html   # run in background
    ```
-   As each real step completes, the CLI appends one structured JSON event (`{id,label,status,shot?,masked?,note?}`) to the progress file. Steps are **emergent**, not fixed: which appear (and their `status`: done/failed/pending/running) reflect what actually happened (3DS, no-ship, cached vs new card…).
-2. While it runs, **poll and render the live image+text view**, republishing the *same* Artifact each time so the user watches it fill in:
+   As each real step completes the CLI appends one JSON event (`{id,label,status,shot?,masked?,note?}`). Each non-card step carries a `shot` = a **standalone, readable screenshot of that step** (open checkout / address filled / shipping / thank-you). Steps are **emergent**, not a fixed list — read the actual events.
+2. **Poll and surface each new step as its own inline image**:
    ```bash
-   aicard shop steps --progress-file /tmp/aicard-steps.jsonl --html /tmp/aicard-live.html
+   aicard shop steps --progress-file /tmp/aicard-steps.jsonl
    ```
-   `shop steps` returns `{steps:[…latest status per step…], terminal}` and (with `--html`) renders the image+text stepper. Republish `/tmp/aicard-live.html` to the same Artifact; narrate in your own words as steps land. Stop when `terminal:true` (receipt reached or a step failed), then show the final `--html` timeline / `receipt`.
+   Returns `{steps:[{id,label,status,note,shot?,masked?}], terminal}`. For each newly-completed step, **display its `shot` inline** (one image, readable) with a one-line caption ("✓ Address filled"). 🔒 A step with `masked:true` (the card-entry step) has **no `shot`** — show a text line "💳 Card entered — masked", never an image. Keep going until `terminal:true`, then show the receipt summary.
 
-**You** decide cadence, wording, and how to react to each step — the CLI only supplies reliable events + screenshots; the presentation is yours to compose dynamically. Do **not** hardcode a fixed step list in your narration — read the actual events.
+So the user sees the checkout unfold **一张一张** — each step a full, legible image — instead of one cramped composite. (The `--html`/`--image` composite timeline still exists for a single scrollable Artifact/summary if you want it, but the per-step images are the default live experience.) **You** decide cadence and wording; the CLI only supplies reliable per-step screenshots + events.
 
 Rules:
 1. **Show the inline image AND publish the Artifact (both).** The `--image` PNG is the **auto-visible** part — display it inline (e.g. read it) so the user sees the visual immediately with zero clicks (whether an Artifact panel auto-opens is the host client's call and cannot be forced). The `--html` file, published as an Artifact, adds click-interaction / the right-side panel. Keep one Artifact per stage; reuse/redeploy rather than spawning many. Do **not** also paste a big markdown table alongside — the image/card is the presentation (one-line pointer + a highlight is enough).

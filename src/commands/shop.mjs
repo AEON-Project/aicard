@@ -435,10 +435,17 @@ export async function steps(opts) {
       htmlPath = opts.html;
     }
 
-    // 折叠为每步最新状态（首见顺序），回摘要供 agent 判断进度/是否结束
+    // 折叠为每步最新状态（首见顺序），回摘要供 agent 逐步呈现（含每步截图路径，供"一张一张"显示）。
+    // 【安全】masked 步骤（填卡）只回 masked:true，绝不回 shot 路径——那截图含明文卡面。
     const latest = {}; const order = [];
     for (const e of events) { if (!(e.id in latest)) order.push(e.id); latest[e.id] = e; }
-    const summary = order.map((id) => ({ id, label: latest[id].label, status: latest[id].status, note: latest[id].note || null }));
+    const summary = order.map((id) => {
+      const e = latest[id];
+      return {
+        id, label: e.label, status: e.status, note: e.note || null,
+        ...(e.masked ? { masked: true } : e.shot ? { shot: e.shot } : {}),
+      };
+    });
     const terminal = order.includes("receipt") || summary.some((s) => s.status === "failed");
 
     emitOk("shop.steps", { count: events.length, steps: summary, terminal, ...(htmlPath ? { htmlPath } : {}) });
