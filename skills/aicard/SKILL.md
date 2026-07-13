@@ -613,6 +613,16 @@ Every stage of the journey (**search → detail → cart → confirm → order**
 | Confirm | `shop confirm --first … --html <h> --image <p> [--confirmable]` | "Confirm Details" card (name/email/address/phone — **no card PII**) |
 | Order | `shop pay … --html <h> --image <p>` | Order-flow timeline: summary + **Attempt log** + step screenshots (card step masked) |
 
+#### Client compatibility — pick the richest your host supports, degrade gracefully
+
+This skill runs on many hosts (Claude Code/Desktop, Cursor, Codex, Gemini CLI, Windsurf, …) with **different display abilities**. The `aicard` CLI is identical everywhere — it only writes files; **how you surface them is your call based on your host's capabilities.** Use this ladder, top-down, and stop at the first you can do:
+
+1. **You have an Artifact/canvas tool** (Claude Code / Desktop / claude.ai) → generate `--html` and **publish it as an Artifact** (interactive, clickable). Also generate `--image` and show it inline (auto-visible even before the panel opens).
+2. **No Artifact tool, but your host renders images inline** (many IDE chats) → generate `--image` and display the PNG inline. Skip `--html` publishing (you have nothing to publish it into).
+3. **Text-only host** (headless terminal CLIs, plain shells) → **do NOT pass `--image`** (it launches a headless browser and, on first use, downloads ~150 MB of Chromium the user can't even see) and do NOT try to "publish an Artifact" (no such tool). Present the **markdown table / text** instead. This always works.
+
+Rule of thumb: **never invoke `--image` unless you can actually display an image to the user**, and **never claim to publish an Artifact unless you have that tool**. When unsure, the markdown table is the safe universal fallback. `--html` is cheap (no browser) so it's fine to also write it as a file the user can open in a browser, even on text hosts — just don't call it an "Artifact".
+
 #### Live step-by-step (real-time, image+text)
 
 The purchase flow (`issue card → open checkout → fill address → shipping → fill card → submit → receipt`) previously returned only at the end. To let the user **perceive each step live** — and to keep the presentation **AI-dynamic, not a fixed template** — drive it yourself from an event stream:

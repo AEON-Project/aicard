@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 const [major] = process.versions.node.split(".").map(Number);
-if (major < 25) {
-  console.error(`aicard requires Node.js >= 25. Current: v${process.versions.node}`);
+if (major < 18) {
+  console.error(`aicard requires Node.js >= 18. Current: v${process.versions.node}`);
   console.error("Upgrade: https://nodejs.org/");
   process.exit(1);
 }
