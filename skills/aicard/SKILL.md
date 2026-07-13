@@ -166,7 +166,7 @@ Trigger: User wants to **buy / create / get a virtual card**.
 
 - Amount must be within `amountLimits.min ~ amountLimits.max` (from Step 1 response; never hardcode)
 - If user does not specify an amount, use this exact copy (**verbatim**, variable substitution only):
-  > You can create a card of up to ${min}~${max}. How much would you like to load onto the card？
+  > You can create a card of up to ${min}~${max}. How much would you like to load onto the card?
 - Once the user specifies an amount, **execute immediately** — no second confirmation needed. Proceed to 2.1.
 
 ### 2.1 Execute Creation

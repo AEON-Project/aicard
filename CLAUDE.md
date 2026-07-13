@@ -38,6 +38,9 @@ No build step — all source is native ES Modules (`.mjs`), executed directly by
 # 单元测试（纯逻辑，无网络）
 node --test test/create-logic.test.mjs
 
+# 守卫：SKILL.md 必须纯英文（无中日韩/全角字符；emoji 不受影响）——防中文引导回流
+node --test test/skill-no-cjk.test.mjs
+
 # 端到端购物演示（真实检索→填卡，fill-only 不提交、不扣款）
 node test/demo-flow.mjs                       # 可选 Q="mini refrigerator" 换品类
 
