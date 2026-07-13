@@ -57,19 +57,20 @@ export async function product(opts) {
     const { getProduct } = await import("../shop/catalog.mjs");
     const p = await getProduct({ id: opts.id, shopDomain: opts.shop });
 
-    let htmlPath = null;
-    if (opts.html) {
+    let htmlPath = null, imagePath = null;
+    if (opts.html || opts.image) {
       const { writeFileSync } = await import("node:fs");
-      const { renderProductHtml } = await import("../shop/render.mjs");
+      const { renderProductHtml, renderHtmlToImage } = await import("../shop/render.mjs");
       const html = await renderProductHtml(
         { ...p, image: p.images?.[0], specText: p.variants[0]?.description || p.description },
         { buyPrompt: `Buy ${p.title}` }
       );
-      writeFileSync(opts.html, html);
-      htmlPath = opts.html;
+      if (opts.html) { writeFileSync(opts.html, html); htmlPath = opts.html; }
+      if (opts.image) { await renderHtmlToImage(html, opts.image, { log: (m) => logInfo("> " + m), width: 800 }); imagePath = opts.image; }
     }
 
     emitOk("shop.product", {
+      ...(imagePath ? { imagePath } : {}),
       title: p.title,
       description: p.description,
       priceMin: p.priceMin,
@@ -107,7 +108,23 @@ export async function cart(opts) {
     // 只有 continueUrl 才暴露后端。标记出来，供 pay 拦截 / 用户知情。
     const backendHost = (() => { try { return new URL(c.continueUrl).host; } catch { return null; } })();
     const testBackend = isTestStore(backendHost);
+
+    // 富展示：购物车摘要卡（--html 可点击 Artifact / --image 内联零点击）
+    let htmlPath = null, imagePath = null;
+    if (opts.html || opts.image) {
+      const { renderCartHtml, renderHtmlToImage } = await import("../shop/render.mjs");
+      const { writeFileSync } = await import("node:fs");
+      const html = await renderCartHtml(
+        { lineItems: c.lineItems, subtotal: c.subtotal, tax: c.tax, shipping: c.shipping, total: c.total, currency: c.currency },
+        { title: "Your Cart", confirmPrompt: opts.confirmable ? "Confirm and place this order" : null }
+      );
+      if (opts.html) { writeFileSync(opts.html, html); htmlPath = opts.html; }
+      if (opts.image) { await renderHtmlToImage(html, opts.image, { log: (m) => logInfo("> " + m) }); imagePath = opts.image; }
+    }
+
     emitOk("shop.cart", {
+      ...(htmlPath ? { htmlPath } : {}),
+      ...(imagePath ? { imagePath } : {}),
       cartId: c.cartId,
       currency: c.currency,
       subtotal: c.subtotal,
@@ -341,17 +358,17 @@ export async function pay(opts) {
 
     // 下单流程时间线 HTML（自包含，Artifact 直显）。【安全】渲染器只嵌无卡面截图，
     // 填卡节点仅"已打码"占位，绝不内嵌 05-card-filled（含明文卡号/CVC）。
-    let timelineHtmlPath = null;
-    if (opts.html) {
+    let timelineHtmlPath = null, timelineImagePath = null;
+    if (opts.html || opts.image) {
       try {
         const { writeFileSync } = await import("node:fs");
-        const { renderOrderTimelineHtml } = await import("../shop/render.mjs");
+        const { renderOrderTimelineHtml, renderHtmlToImage } = await import("../shop/render.mjs");
         const html = await renderOrderTimelineHtml(r, receipt, {
           title: `Order flow — ${receipt?.merchant || (() => { try { return new URL(opts.continueUrl).host; } catch { return "checkout"; } })()}`,
           card: { source: cardSource, last4: String(card.number).slice(-4), amount },
         });
-        writeFileSync(opts.html, html);
-        timelineHtmlPath = opts.html;
+        if (opts.html) { writeFileSync(opts.html, html); timelineHtmlPath = opts.html; }
+        if (opts.image) { await renderHtmlToImage(html, opts.image, { log: (m) => logInfo("> " + m) }); timelineImagePath = opts.image; }
       } catch (e) {
         logInfo(`> Timeline render failed (non-fatal): ${e.message}`);
       }
@@ -368,6 +385,7 @@ export async function pay(opts) {
       order: r.order,
       artifacts: r.artifacts,
       ...(timelineHtmlPath ? { timelineHtmlPath } : {}),
+      ...(timelineImagePath ? { timelineImagePath } : {}),
       ...(progressFile ? { progressFile } : {}),
       signals: r.signals,
       ...(suggestion ? { suggestion } : {}),
@@ -426,6 +444,30 @@ export async function steps(opts) {
     emitOk("shop.steps", { count: events.length, steps: summary, terminal, ...(htmlPath ? { htmlPath } : {}) });
   } catch (e) {
     emitErr("shop.steps", e.code || "SHOP_STEPS_FAILED", { message: e.message });
+  }
+}
+
+/**
+ * 渲染"确认收货信息"卡（付款前给用户核对）。不含任何卡面信息。
+ * --html 出可点击 Artifact / --image 出内联 PNG（零点击自动显示）。
+ */
+export async function confirm(opts) {
+  try {
+    const name = [opts.first, opts.last].filter(Boolean).join(" ").trim();
+    const address = [opts.address1, opts.address2, opts.city, opts.region, opts.zip, opts.country].filter(Boolean).join(", ");
+    const fields = { name, email: opts.email, address, phone: opts.phone, note: opts.note || null };
+
+    let htmlPath = null, imagePath = null;
+    if (opts.html || opts.image) {
+      const { renderConfirmHtml, renderHtmlToImage } = await import("../shop/render.mjs");
+      const { writeFileSync } = await import("node:fs");
+      const html = renderConfirmHtml(fields, { title: opts.title || "Confirm Details", confirmPrompt: opts.confirmable ? "Proceed with this order" : null });
+      if (opts.html) { writeFileSync(opts.html, html); htmlPath = opts.html; }
+      if (opts.image) { await renderHtmlToImage(html, opts.image, { log: (m) => logInfo("> " + m), width: 620 }); imagePath = opts.image; }
+    }
+    emitOk("shop.confirm", { fields, ...(htmlPath ? { htmlPath } : {}), ...(imagePath ? { imagePath } : {}) });
+  } catch (e) {
+    emitErr("shop.confirm", e.code || "SHOP_CONFIRM_FAILED", { message: e.message });
   }
 }
 

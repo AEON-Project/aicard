@@ -218,6 +218,94 @@ export async function renderProductHtml(p, { buyPrompt = null } = {}) {
 </style>`;
 }
 
+/**
+ * 渲染购物车摘要卡（商品行 + 小计/税/运费/合计 + 支付来源说明），自包含可直接 Artifact。
+ * @param {object} cart - shop.cart 返回（lineItems/subtotal/tax/shipping/total/currency…）
+ * @param {{title?:string, paymentNote?:string, confirmPrompt?:string}} [opts]
+ */
+export async function renderCartHtml(cart, { title = "Your Cart", paymentNote = null, confirmPrompt = null } = {}) {
+  const items = Array.isArray(cart.lineItems) ? cart.lineItems : Array.isArray(cart.items) ? cart.items : [];
+  const money = (v) => (v == null || v === "" ? "" : /^\$/.test(String(v)) ? String(v) : `$${v}`);
+  const rows = await Promise.all(items.map(async (it) => {
+    const img = it.image ? await fetchImageDataUri(it.image, { width: 120 }) : null;
+    const price = money(it.price ?? it.total ?? it.lineTotal);
+    const qty = it.quantity ?? it.qty ?? 1;
+    const sub = [qty ? `Qty ${esc(qty)}` : "", it.merchant || it.merchantDomain ? esc(it.merchant || it.merchantDomain) : ""].filter(Boolean).join(" · ");
+    return `<div class="crow">
+      ${img ? `<div class="cimg"><img src="${img}" alt=""></div>` : `<div class="cimg noimg">🛍️</div>`}
+      <div class="cinfo"><div class="cname">${esc(it.title || it.name || "Item")}</div>${sub ? `<div class="csub">${sub}</div>` : ""}</div>
+      <div class="cprice">${esc(price)}</div>
+    </div>`;
+  }));
+  const tline = (k, v, strong) => (v == null || v === "" ? "" : `<div class="tline${strong ? " strong" : ""}"><span>${esc(k)}</span><span>${esc(money(v))}</span></div>`);
+  const totals =
+    tline("Subtotal", cart.subtotal) +
+    tline("Tax", cart.tax) +
+    tline("Shipping", cart.shipping) +
+    tline("Total", cart.total, true) +
+    (cart.total == null ? `<div class="tnote">Tax / shipping settled at checkout</div>` : "");
+  const cur = cart.currency ? ` <span class="cur">${esc(cart.currency)}</span>` : "";
+
+  return `<div class="ctwrap"${confirmPrompt ? ` data-prompt="${esc(confirmPrompt)}"` : ""}>
+  <h2>${esc(title)}${cur}</h2>
+  <div class="clist">${rows.join("")}</div>
+  <div class="totals">${totals}</div>
+  ${paymentNote ? `<div class="paynote">${esc(paymentNote)}</div>` : ""}
+  ${confirmPrompt ? `<p class="tip">💡 Click to confirm & place the order, or reply "yes"</p>` : ""}
+</div>${confirmPrompt ? SEND_PROMPT_SCRIPT : ""}
+<style>
+  .ctwrap { max-width: 560px; margin: 0 auto; padding: 20px; font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif; color: #1a1a1a; }
+  .ctwrap[data-prompt] { cursor: pointer; }
+  .ctwrap h2 { font-size: 19px; font-weight: 650; margin: 0 0 16px; }
+  .ctwrap .cur { font-size: 12px; color: #999; font-weight: 500; }
+  .clist { border: 1px solid #ececec; border-radius: 12px; overflow: hidden; }
+  .crow { display: grid; grid-template-columns: 56px 1fr auto; gap: 12px; align-items: center; padding: 12px 14px; }
+  .crow + .crow { border-top: 1px solid #f0f0f0; }
+  .cimg { width: 56px; height: 56px; border-radius: 8px; overflow: hidden; background: #f6f6f6; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+  .cimg img { width: 100%; height: 100%; object-fit: cover; }
+  .cname { font-size: 14px; font-weight: 600; line-height: 1.3; }
+  .csub { font-size: 12px; color: #999; margin-top: 2px; }
+  .cprice { font-size: 15px; font-weight: 700; color: #1a1a1a; }
+  .totals { margin-top: 14px; }
+  .tline { display: flex; justify-content: space-between; font-size: 14px; color: #555; padding: 5px 2px; }
+  .tline.strong { font-size: 16px; font-weight: 700; color: #1a1a1a; border-top: 1px solid #ececec; margin-top: 4px; padding-top: 10px; }
+  .tnote { font-size: 12px; color: #999; margin-top: 4px; }
+  .paynote { margin-top: 14px; font-size: 13px; color: #6a5300; background: #fff8e6; border: 1px solid #f2e2b0; border-radius: 8px; padding: 10px 12px; line-height: 1.5; }
+  .tip { margin-top: 16px; font-size: 13px; color: #666; }
+</style>`;
+}
+
+/**
+ * 渲染"确认收货信息"卡（姓名/邮箱/地址/电话），自包含可直接 Artifact。不含任何卡面信息。
+ * @param {object} f - {name,email,address,phone,note}
+ * @param {{title?:string, confirmPrompt?:string}} [opts]
+ */
+export function renderConfirmHtml(f, { title = "Confirm Details", confirmPrompt = null } = {}) {
+  const row = (k, v) => (v ? `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>` : "");
+  return `<div class="cfwrap"${confirmPrompt ? ` data-prompt="${esc(confirmPrompt)}"` : ""}>
+  <h2>${esc(title)}</h2>
+  <table class="cf">
+    ${row("Name", f.name)}
+    ${row("Email", f.email)}
+    ${row("Address", f.address)}
+    ${row("Phone", f.phone)}
+  </table>
+  ${f.note ? `<div class="cfnote">${esc(f.note)}</div>` : ""}
+  ${confirmPrompt ? `<p class="tip">💡 Click to confirm, or reply "proceed"</p>` : ""}
+</div>${confirmPrompt ? SEND_PROMPT_SCRIPT : ""}
+<style>
+  .cfwrap { max-width: 560px; margin: 0 auto; padding: 20px; font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif; color: #1a1a1a; }
+  .cfwrap[data-prompt] { cursor: pointer; }
+  .cfwrap h2 { font-size: 19px; font-weight: 650; margin: 0 0 16px; }
+  .cf { border-collapse: collapse; width: 100%; font-size: 14px; border: 1px solid #ececec; border-radius: 12px; overflow: hidden; }
+  .cf th { text-align: left; color: #888; font-weight: 500; padding: 10px 14px; background: #fafafa; white-space: nowrap; width: 90px; vertical-align: top; }
+  .cf td { padding: 10px 14px; }
+  .cf tr + tr th, .cf tr + tr td { border-top: 1px solid #f0f0f0; }
+  .cfnote { margin-top: 12px; font-size: 12px; color: #999; }
+  .tip { margin-top: 16px; font-size: 13px; color: #666; }
+</style>`;
+}
+
 // 含【明文卡面】的填卡截图 tag：绝不内嵌（安全红线）。
 const CARD_STEP_TAGS = ["05-card-filled", "05b-refill-failed", "05c-shipping-not-ready"];
 const STATUS_ICON = { done: "✓", failed: "✕", pending: "⏳", skipped: "◦", running: "•" };
@@ -273,7 +361,7 @@ const STEPPER_CSS = `
  * @param {object|null} receipt - shop.pay 组装的收据（masked last4/shipTo/amountCharged…）
  * @param {{title?:string, card?:{source?:string,last4?:string,amount?:(string|number)}}} [opts]
  */
-export async function renderOrderTimelineHtml(result, receipt, { title = "Order flow", card = null } = {}) {
+export async function renderOrderTimelineHtml(result, receipt, { title = "Order flow", card = null, attempts = null } = {}) {
   const artifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
   const tagOf = (fp) => String(fp).split("/").pop().replace(/^co-/, "").replace(/\.png$/i, "");
   const byTag = {};
@@ -388,9 +476,24 @@ export async function renderOrderTimelineHtml(result, receipt, { title = "Order 
     ? `<span class="ok">✅ Payment successful</span>`
     : `<span class="warn">⚠️ ${esc(outcome || "incomplete")}</span>`;
 
+  // Attempt log：多次提交时由调用方传 attempts；单次运行则据本次结果合成一行。
+  const alog = attempts || [{
+    n: 1,
+    result: success ? "success" : (outcome || "incomplete"),
+    payment: card ? `${card.source === "new" ? "New" : "Cached"} card •••• ${card.last4 || "----"}` : "",
+    amount: receipt?.amountCharged || (card?.amount != null ? `$${card.amount}` : ""),
+    orderNo: receipt?.orderNumber || "",
+  }];
+  const alogRows = alog.map((a) => {
+    const ok = String(a.result).toLowerCase() === "success";
+    return `<tr><td>${esc(a.n)}</td><td><span class="badge ${ok ? "done" : "failed"}">${ok ? "✓ success" : "✕ " + esc(a.result)}</span></td><td>${esc(a.payment || "")}</td><td>${esc(a.amount || "")}</td><td>${esc(a.orderNo || "")}</td></tr>`;
+  }).join("");
+  const attemptLog = `<h3>Attempt log</h3><table class="alog"><tr><th>#</th><th>Result</th><th>Payment</th><th>Amount</th><th>Order #</th></tr>${alogRows}</table>`;
+
   return `<div class="owrap">
   <div class="ohead"><h2>${esc(title)}</h2>${status}</div>
   ${summary}
+  ${attemptLog}
   <h3>Steps</h3>
   <div class="steps">${stepHtml}</div>
   <p class="tip">🔒 Card details are never shown; the "Fill card details" step is masked. Card-entry screenshots (which would show the full card number/CVC) are never embedded.</p>
@@ -405,6 +508,9 @@ export async function renderOrderTimelineHtml(result, receipt, { title = "Order 
   .osum th { text-align: left; color: #888; font-weight: 500; padding: 9px 14px; background: #fafafa; white-space: nowrap; width: 130px; vertical-align: top; }
   .osum td { padding: 9px 14px; }
   .osum tr + tr th, .osum tr + tr td { border-top: 1px solid #f0f0f0; }
+  .alog { border-collapse: collapse; width: 100%; font-size: 13px; border: 1px solid #ececec; border-radius: 12px; overflow: hidden; }
+  .alog th { text-align: left; color: #888; font-weight: 500; padding: 8px 12px; background: #fafafa; }
+  .alog td { padding: 8px 12px; border-top: 1px solid #f0f0f0; }
   h3 { font-size: 15px; font-weight: 600; margin: 22px 0 12px; }
   .tip { margin-top: 18px; font-size: 12px; color: #888; }
 ${STEPPER_CSS}

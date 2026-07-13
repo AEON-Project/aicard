@@ -603,11 +603,15 @@ Requires a Token-tier credential (`read_global_api_orders`). **⚠️ Can only q
 
 Whenever you have an Artifact/canvas capability (**Claude Desktop, claude.ai, any host with the Artifact tool**), making the shopping flow visual is the **DEFAULT — do it proactively at every stage, without being asked**. At each stage the CLI produces a self-contained HTML page you **publish as an Artifact**. Only drop to markdown tables/text when you genuinely cannot render an Artifact.
 
+Every stage of the journey (**search → detail → cart → confirm → order**) has a visual. Each command takes **both** `--html <path>` (self-contained clickable page → publish as an Artifact) and `--image <path>` (a PNG rendered via Playwright). **Default = emit both and show both**: display the PNG **inline** (guaranteed auto-visible, zero clicks — no artifact panel needed) *and* publish the HTML as an Artifact (interactive / right-panel). The inline image is what makes it appear automatically; the Artifact adds click-interaction.
+
 | Stage | Command | What it renders |
 |------|--------|-----------------|
-| Search | `shop search … --html <path>` | Clickable product-card grid (click a card → sends "Buy item #N" back) |
-| Detail | `shop product --id … --html <path>` | Product-detail card (large image + price + spec table; clickable to buy) |
-| Order | `shop pay … --html <path>` | Order-flow timeline: summary (merchant / item / amount / `•••• last4` / ship-to) + step screenshots |
+| Search | `shop search … --html <h> --image <p>` | Product-card grid (cover images + price + merchant; cards clickable → "Buy item #N") |
+| Detail | `shop product --id … --html <h> --image <p>` | Product-detail card (large image + price + spec table; clickable to buy) |
+| Cart | `shop cart … --html <h> --image <p> [--confirmable]` | Cart-summary card (line items + subtotal/tax/shipping/total) |
+| Confirm | `shop confirm --first … --html <h> --image <p> [--confirmable]` | "Confirm Details" card (name/email/address/phone — **no card PII**) |
+| Order | `shop pay … --html <h> --image <p>` | Order-flow timeline: summary + **Attempt log** + step screenshots (card step masked) |
 
 #### Live step-by-step (real-time, image+text)
 
@@ -627,8 +631,8 @@ The purchase flow (`issue card → open checkout → fill address → shipping �
 **You** decide cadence, wording, and how to react to each step — the CLI only supplies reliable events + screenshots; the presentation is yours to compose dynamically. Do **not** hardcode a fixed step list in your narration — read the actual events.
 
 Rules:
-1. **Publish, don't paste** — read the generated file and render it as an Artifact (it's fully self-contained: images embedded as data URIs, no external fetches, so it displays under the Artifact CSP). Keep one Artifact per stage; reuse/redeploy rather than spawning many.
-2. **Clickable cards need a client that can send prompts back** (Claude Desktop). Elsewhere the click is a no-op and the user picks by replying a number — always keep that textual path working.
+1. **Show the inline image AND publish the Artifact (both).** The `--image` PNG is the **auto-visible** part — display it inline (e.g. read it) so the user sees the visual immediately with zero clicks (whether an Artifact panel auto-opens is the host client's call and cannot be forced). The `--html` file, published as an Artifact, adds click-interaction / the right-side panel. Keep one Artifact per stage; reuse/redeploy rather than spawning many. Do **not** also paste a big markdown table alongside — the image/card is the presentation (one-line pointer + a highlight is enough).
+2. **Clickable cards need a client that can send prompts back** (Claude Desktop). Elsewhere the click is a no-op and the user picks by replying a number — always keep that textual path working. The inline image is never clickable; that's fine, it's for at-a-glance viewing.
 3. 🔒 **Card safety is non-negotiable.** The order timeline renderer embeds only non-card screenshots and shows the card-entry step as a **masked placeholder** — the raw card-entry screenshot (full PAN/CVC visible) is **never** embedded. Never paste a card-entry screenshot, full card number, or CVC into the chat or an Artifact yourself. Only the last 4 digits may be shown.
 4. **Fallback rule (not an opt-out)** — the Artifact is the default; only fall back to the table/text flow when you truly cannot publish an Artifact (text-only terminal) or the user explicitly asked for text. "The user didn't ask for images" is **not** a reason to skip it — make it visual by default.
 

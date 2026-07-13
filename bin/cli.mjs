@@ -162,6 +162,7 @@ shop
   .requiredOption("--id <gid>", "Product id (productId from search)")
   .option("--shop <domain>", "Merchant domain (Storefront); omit for Global Catalog")
   .option("--html <path>", "Also render a self-contained product-detail HTML page (image + specs) to this path")
+  .option("--image <path>", "Also render the product-detail card to a PNG — display inline for zero-click auto-visible image+text")
   .action(async (opts) => {
     const { product } = await import("../src/commands/shop.mjs");
     return product(opts);
@@ -176,9 +177,35 @@ shop
   .option("--country <iso>", "Ship-to country ISO-2")
   .option("--region <code>", "Ship-to region/state")
   .option("--zip <code>", "Postal code")
+  .option("--html <path>", "Render a cart-summary card HTML (self-contained) to this path — publish as an Artifact")
+  .option("--image <path>", "Render the cart-summary card to a PNG — display inline for auto-visible image+text with zero clicks")
+  .option("--confirmable", "Make the card clickable to confirm/place the order", false)
   .action(async (opts) => {
     const { cart } = await import("../src/commands/shop.mjs");
     return cart(opts);
+  });
+
+shop
+  .command("confirm")
+  .description("Render a 'Confirm Details' card (shipping info to review before pay) — image+text, no card PII")
+  .option("--first <name>", "First name")
+  .option("--last <name>", "Last name")
+  .option("--email <email>", "Email")
+  .option("--address1 <street>", "Address line 1")
+  .option("--address2 <street>", "Address line 2")
+  .option("--city <city>", "City")
+  .option("--region <name>", "Region/State")
+  .option("--zip <code>", "Postal / ZIP code")
+  .option("--country <name>", "Country")
+  .option("--phone <phone>", "Phone")
+  .option("--note <text>", "Footnote (e.g. inferred state)")
+  .option("--title <text>", "Card title")
+  .option("--html <path>", "Render to HTML (self-contained) — publish as an Artifact")
+  .option("--image <path>", "Render to PNG — display inline for zero-click auto-visible image+text")
+  .option("--confirmable", "Make the card clickable to proceed", false)
+  .action(async (opts) => {
+    const { confirm } = await import("../src/commands/shop.mjs");
+    return confirm(opts);
   });
 
 shop
@@ -207,6 +234,7 @@ shop
   .option("--otp-file <path>", "OTP relay file path (default /tmp/aicard-otp.txt)")
   .option("--out <dir>", "Screenshot output dir (default ./artifacts)")
   .option("--html <path>", "Also render a self-contained order-flow timeline HTML page to this path (card-entry step masked, never embeds card PII)")
+  .option("--image <path>", "Also render the order-flow timeline to a PNG — display inline for zero-click auto-visible image+text (card step masked)")
   .option("--progress-file <path>", "Stream structured per-step events (JSONL) to this file as each step completes — tail it to show live progress (card step is masked, no card PII)")
   .action(async (opts) => {
     const { pay } = await import("../src/commands/shop.mjs");
