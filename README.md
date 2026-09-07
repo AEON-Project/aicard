@@ -178,11 +178,27 @@ child.on("close", (code) => {
 - **`--dry-run`** on `create` performs all preflight checks (402 fetch, balance, allowance) but skips signing/transacting — perfect for integration tests and smoke checks.
 - **`--legacy-output`** restores the pre-envelope JSON shape for legacy scripts during migration.
 
+The [shop commands](#shop--pay-on-shopify) chain the same way — each envelope's `data` carries exactly what the next step needs:
+
+```js
+// search → cart → pay: data.products[i] feeds cart; data.total + data.continueUrl feed pay
+const search = await runAicard(["--quiet", "shop", "search", "--query", "wireless earbuds under $50"]);
+const p = search.data.products[0];
+const cart = await runAicard(["--quiet", "shop", "cart", "--shop", p.merchantDomain,
+  "--variant", p.variantId, "--country", "US", "--region", "CA", "--zip", "94107"]);
+const pay = await runAicard(["--quiet", "shop", "pay", "--continue-url", cart.data.continueUrl,
+  "--amount", cart.data.total, "--fill-only", /* shipping fields... */]);
+// --fill-only = dry-run (no charge). Drop it for real payment — after explicit user confirmation.
+// Never auto-retry `shop pay`: check data.outcome / data.suggestion instead (double-charge risk).
+```
+
+See [docs/recipes/integrate-in-agent.md](docs/recipes/integrate-in-agent.md) for the full orchestration — including live progress streaming via `--progress-file` + `shop steps`, and the outcome/error-recovery tables.
+
 Detailed references:
 
-- [docs/output-schema.md](docs/output-schema.md) — full envelope schema per command
-- [docs/exit-codes.md](docs/exit-codes.md) — exit code categories + `error.code` reference
-- [docs/recipes/integrate-in-agent.md](docs/recipes/integrate-in-agent.md) — Node.js & Python wrappers
+- [docs/output-schema.md](docs/output-schema.md) — full envelope schema per command, incl. all `shop.*` payloads and `shop pay` outcome semantics
+- [docs/exit-codes.md](docs/exit-codes.md) — exit code categories + `error.code` reference (card + shop)
+- [docs/recipes/integrate-in-agent.md](docs/recipes/integrate-in-agent.md) — Node.js & Python wrappers + full shopping orchestration
 - [docs/recipes/error-recovery.md](docs/recipes/error-recovery.md) — code-by-code recovery strategy
 - [docs/recipes/cron-issue-cards.md](docs/recipes/cron-issue-cards.md) — scheduled card issuance
 
