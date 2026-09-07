@@ -1,5 +1,9 @@
 # aicard × Shopify 自动购物支付 —— 端到端方案设计
 
+> **📦 设计存档**：本文是 `aicard shop` 命令族上线前的方案设计文档，保留作历史决策参考（含实测结论与备选路径研究）。功能现已上线，**使用与集成请看现行文档**：
+> [output-schema.md](./output-schema.md)（shop 命令 envelope 结构）· [exit-codes.md](./exit-codes.md)（错误码）· [recipes/integrate-in-agent.md](./recipes/integrate-in-agent.md)（程序化编排示例）· [README](../README.md#shop--pay-on-shopify)（四步流程）。
+> 文中"待确认/里程碑"等表述反映的是设计时点状态，不代表现状。
+
 > 目标：用户说"买某商品" → 自动完成 Shopify 商户发现、拼单、发卡、填卡付款的完整闭环。
 > 载体：扩展现有 `@aeon-ai-pay/aicard`（新增 `aicard shop` 命令族）。
 
