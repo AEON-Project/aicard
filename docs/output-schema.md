@@ -133,6 +133,154 @@ Every `aicard` command emits **exactly one line of JSON** to **stdout** —— t
 }
 ```
 
+## Shop Command Payloads
+
+All `shop` subcommands use the same envelope; `command` is namespaced (`shop.search`, `shop.cart`, …). Optional render flags (`--html` / `--image`) add `htmlPath` / `imagePath` to the payload when used.
+
+### `shop search`
+
+```json
+{
+  "scope": "global" | "storefront",
+  "count": 30,
+  "excludedTest": 2,
+  "excludedNoCard": 1,
+  "sortedBy": "relevance" | "price",
+  "hasNext": true,
+  "cursor": "...",
+  "products": [
+    { "productId": "gid://shopify/Product/...", "title": "...", "price": "...", "merchantDomain": "shop.example.com", "...": "..." }
+  ]
+}
+```
+
+### `shop product`
+
+```json
+{
+  "title": "...",
+  "description": "...",
+  "priceMin": "19.99", "priceMax": "29.99", "currency": "USD",
+  "merchantDomain": "shop.example.com", "merchantName": "...",
+  "detailUrl": "https://...",
+  "images": ["https://..."],
+  "options": [ { "name": "Color", "values": [ { "value": "Black", "available": true } ] } ],
+  "specText": "...",
+  "variantCount": 4,
+  "variants": [
+    { "variantId": "gid://shopify/ProductVariant/...", "options": { "Color": "Black" }, "price": "19.99", "available": true }
+  ]
+}
+```
+
+### `shop cart`
+
+```json
+{
+  "cartId": "...",
+  "currency": "USD",
+  "subtotal": "19.99", "tax": "1.80", "shipping": "5.00", "total": "26.79",
+  "continueUrl": "https://.../checkouts/cn/...",
+  "backendHost": "shop.example.com",
+  "testBackend": false,
+  "acceptsCard": true,
+  "paymentMethods": ["credit_card", "paypal"],
+  "lineItems": [ { "...": "..." } ],
+  "expiresAt": "..."
+}
+```
+
+- `continueUrl` + `total` are the two inputs `shop pay` needs.
+- `testBackend: true` → the checkout backend is a test store; `shop pay` blocks it unless `--allow-test`. A `warning` field is included.
+- `acceptsCard: false` → merchant takes wallets only (e.g. PayPal); the virtual card cannot pay here. A `warning` field is included.
+
+### `shop pay`
+
+Card PII **never** enters the envelope — only `cardLast4` / `cardScheme`.
+
+```json
+{
+  "cardSource": "cache" | "issued",
+  "cardOrderNo": "...",
+  "cardLast4": "1234",
+  "cardScheme": "VISA",
+  "outcome": "success",
+  "receipt": {
+    "status": "confirmed",
+    "merchant": "...", "orderNumber": "X0FCMYJAT",
+    "orderUrl": "https://...", "orderUrlDurable": false,
+    "purchasedAt": "2026-01-01T00:00:00.000Z",
+    "amountCharged": "$26.79", "amountSource": "checkout_total" | "cli_amount_fallback",
+    "subtotal": "...", "shippingFee": "...", "tax": "...", "total": "...", "items": [ ... ],
+    "shippingMethod": "...",
+    "payment": { "scheme": "VISA", "last4": "1234", "source": "cache" | "issued", "note": "..." },
+    "shipTo": { "name": "...", "email": "...", "phone": "...", "address": "..." },
+    "proofImage": "~/.aicard/receipts/receipt-....png",
+    "reopenVia": ["..."]
+  },
+  "order": { "...": "thank-you page extraction" },
+  "artifacts": ["./artifacts/co-01-....png", "..."],
+  "signals": { "paySubmitted": true, "...": "..." },
+  "suggestion": "present only on non-success — human-readable next step",
+  "progressFile": "/tmp/p.jsonl"
+}
+```
+
+`outcome` values (only `success` means a confirmed order):
+
+| `outcome` | Meaning | Charged? |
+| --------- | ------- | -------- |
+| `success` | Order confirmed (thank-you page reached) | ✅ Yes |
+| `filled_no_submit` | `--fill-only` dry-run completed | No |
+| `challenge_3ds` / `challenge_captcha` | Verification challenge pending — incomplete = not authorized | No |
+| `declined` | Card declined by merchant | No |
+| `pending` / `error` **with** `signals.paySubmitted: true` | Pay was clicked but result unconfirmed — **may be charged; never rerun blindly** | ⚠️ Unknown |
+| `card_not_supported` | Merchant takes wallets only, no card fields | No |
+| `shipping_not_ready` | Shipping rates never loaded | No |
+| `checkout_unavailable` | Checkout link invalid / expired | No |
+| `bot_blocked` | Anti-bot (Cloudflare etc.) blocked the session | No |
+| `fill_failed` / `no_card_iframe` / `address_incomplete` | Form filling did not complete | No |
+
+> ⚠️ `shop pay` **never auto-retries**. On any non-success outcome, follow the `suggestion` field; if `signals.paySubmitted` is true, verify whether the charge went through before doing anything else.
+
+### `shop cards`
+
+```json
+{
+  "count": 3,
+  "usable": 1,
+  "cards": [ { "orderNo": "...", "last4": "1234", "scheme": "VISA", "amount": 26.79, "used": false, "...": "..." } ]
+}
+```
+
+### `shop steps`
+
+```json
+{
+  "count": 12,
+  "steps": [
+    { "id": "open", "label": "Open checkout", "status": "done", "note": null, "shot": "./artifacts/co-01-....png" },
+    { "id": "card", "label": "Fill card", "status": "done", "masked": true }
+  ],
+  "terminal": false
+}
+```
+
+- `masked: true` steps (card entry) never include a screenshot path — those screenshots contain card PII.
+- `terminal: true` once a `receipt` step appears or any step failed — stop polling then.
+
+### `shop confirm`
+
+```json
+{
+  "fields": { "first": "...", "last": "...", "email": "...", "...": "..." }
+}
+```
+
+### `shop track`
+
+Requires a Token-tier credential (`--bearer` or env `UCP_ORDER_TOKEN`). Returns the merchant's `get_order` response (`status` / `fulfillment_status` / tracking events). Note: only orders completed via the pure-API path are visible here — browser-path orders (the current `shop pay` default) are tracked via the confirmation email and `receipt.proofImage` instead.
+
 ## Logging Flags
 
 | Flag | Effect |

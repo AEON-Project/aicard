@@ -51,6 +51,38 @@ The full set of `error.code` values, grouped by exit code, is defined in [`src/e
 | `INVALID_PAYMENT_AMOUNT` | Service returned a 402 with `amount === 0`. |
 | `PAYMENT_FAILED` | Service rejected the signed payment request. |
 
+### Exit 1 — Shop User / Validation Errors
+
+| Code | When |
+| ---- | ---- |
+| `NO_URL` | `shop pay` without `--continue-url` (get it from `shop cart`). |
+| `NO_AMOUNT` | `shop pay` `--amount` missing or not a positive number (must equal the cart total). |
+| `TEST_STORE_BLOCKED` | Checkout backend is a test store. `error.needsConfirm: true` — a confirmation gate, not a dead end; rerun with `--allow-test` after the user agrees. |
+| `MISSING_ID` | `shop product` without `--id`. |
+| `MISSING_SHOP` | Merchant domain (`--shop`) required but missing. |
+| `MISSING_VARIANT` | `shop cart` without `--variant`. |
+| `VARIANT_NOT_FOUND` | Variant doesn't exist at this merchant (usually a Global-catalog variant passed to a storefront). `error.hint` explains the fix: re-resolve via `shop search --shop <domain>`. |
+| `MISSING_SHIPPING_FIELDS` | Required shipping fields missing — `error.missing` lists them all at once. |
+| `INVALID_EMAIL` | Email failed format validation. |
+| `INVALID_COUNTRY` | Country is not a known name or ISO code. |
+| `NEEDS_APPROVE_GAS` | Card issuance needs an approve but no BNB. Run `aicard gas`. |
+| `ORDER_AUTH_REQUIRED` | `shop track` needs a Token-tier credential (`--bearer` / `UCP_ORDER_TOKEN`). |
+| `ORDER_NO_SHOP` | `shop track` without `--shop`. |
+| `MISSING_PROGRESS_FILE` | `shop steps` without `--progress-file`. |
+| `NO_EVENTS_YET` | Progress file not created yet — the `shop pay` run may not have started. Retry after a short delay. |
+
+### Exit 3 — Shop Service / Network
+
+| Code | When |
+| ---- | ---- |
+| `SHOP_SEARCH_FAILED` / `SHOP_PRODUCT_FAILED` / `SHOP_CART_FAILED` / `SHOP_PAY_FAILED` / `SHOP_TRACK_FAILED` / `SHOP_CARDS_FAILED` / `SHOP_CONFIRM_FAILED` / `SHOP_STEPS_FAILED` | Generic upstream failure of the corresponding subcommand. Search/cart errors may carry `error.retryAfter` (seconds) when rate-limited. |
+| `CARD_ISSUE_FAILED` | Card issuance failed during `shop pay` (may carry `error.required` / `error.available` for balance shortfalls). |
+| `CARD_NOT_READY` | Card issued but full details not yet available. |
+| `PLAYWRIGHT_MISSING` | Playwright not installed. Run `npm i -g playwright && npx playwright install chromium`. |
+| `BROWSER_INSTALL_FAILED` | Chromium download failed. Run `npx playwright install chromium`. |
+| `UCP_NETWORK` / `UCP_RATE_LIMITED` / `UCP_RPC_ERROR` / `UCP_TOOL_ERROR` / `UCP_BAD_RESPONSE` | UCP (merchant MCP endpoint) request failures. |
+| `TOKENIZE_FAILED` / `TOKENIZE_NETWORK` / `TOKENIZE_NO_TOKEN` | Card tokenization failures (pure-API path, not yet the default). |
+
 ### Exit 4 — Internal
 
 | Code | When |

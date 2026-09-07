@@ -54,6 +54,8 @@ export const ERROR_CODES = {
   ORDER_NO_SHOP:          { exit: 1, message: "get_order requires the merchant domain (--shop)." },
   TOKENIZER_ENDPOINT_UNKNOWN: { exit: 1, message: "Card tokenizer endpoint unknown (pending Shopify)." },
   NO_CHECKOUT_ID:         { exit: 1, message: "Missing checkout_id for tokenization." },
+  MISSING_PROGRESS_FILE:  { exit: 1, message: "Missing --progress-file (the JSONL written by `shop pay --progress-file`)." },
+  NO_EVENTS_YET:          { exit: 1, message: "Progress file not created yet; the run may not have started." },
 
   // ===== Shop 服务/网络（exit 3）=====
   SHOP_SEARCH_FAILED:     { exit: 3, message: "Catalog search failed." },
@@ -62,6 +64,8 @@ export const ERROR_CODES = {
   SHOP_PAY_FAILED:        { exit: 3, message: "Checkout payment failed." },
   SHOP_TRACK_FAILED:      { exit: 3, message: "Order tracking failed." },
   SHOP_CARDS_FAILED:      { exit: 3, message: "Listing cached cards failed." },
+  SHOP_CONFIRM_FAILED:    { exit: 3, message: "Rendering the confirm card failed." },
+  SHOP_STEPS_FAILED:      { exit: 3, message: "Rendering the step-progress view failed." },
   CARD_ISSUE_FAILED:      { exit: 3, message: "Card issuance failed." },
   CARD_NOT_READY:         { exit: 3, message: "Card issued but full details not ready." },
   PLAYWRIGHT_MISSING:     { exit: 3, message: "Playwright not installed. Run: npm i -g playwright && npx playwright install chromium" },

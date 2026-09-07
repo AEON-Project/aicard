@@ -28,6 +28,31 @@ Map each `error.code` returned by the envelope to a concrete recovery action. Us
 | `INTERNAL_ERROR` | 4 | File a bug. Don't retry. |
 | `WALLET_ERROR` | 1 | Generic wallet failure. Surface to user, ask whether to retry. |
 
+## Shop (`aicard shop *`) Codes
+
+| `error.code` | Exit | Recommended Recovery |
+| ------------ | :--: | -------------------- |
+| `TEST_STORE_BLOCKED` | 1 | A confirmation gate (`error.needsConfirm: true`), not a failure. Tell the user the backend is a test store; rerun with `--allow-test` only after they agree. |
+| `VARIANT_NOT_FOUND` | 1 | Follow `error.hint`: re-resolve the variant via `shop search --shop <domain>`, then rebuild the cart. Don't reuse Global-catalog variants on a storefront. |
+| `MISSING_SHIPPING_FIELDS` | 1 | `error.missing` lists every missing field at once — collect them all, then retry once. |
+| `INVALID_EMAIL` / `INVALID_COUNTRY` | 1 | Fix the flagged field (`error.field`) and retry. |
+| `NEEDS_APPROVE_GAS` | 1 | Run `aicard gas`, then retry `shop pay`. |
+| `ORDER_AUTH_REQUIRED` | 1 | `shop track` needs `--bearer` / `UCP_ORDER_TOKEN`. For browser-path orders, use the confirmation email + `receipt.proofImage` instead. |
+| `NO_EVENTS_YET` | 1 | The `shop pay` run hasn't written events yet. Poll `shop steps` again after 2–5 s. |
+| `SHOP_SEARCH_FAILED` / `SHOP_CART_FAILED` | 3 | Retryable. Honour `error.retryAfter` (seconds) if present; otherwise exponential backoff. |
+| `CARD_ISSUE_FAILED` | 3 | If `error.required` / `error.available` present, it's a balance shortfall — top up the difference and retry. Otherwise treat as service error. |
+| `PLAYWRIGHT_MISSING` / `BROWSER_INSTALL_FAILED` | 3 | One-time environment fix: `npm i -g playwright && npx playwright install chromium`, then retry. |
+| `SHOP_PAY_FAILED` | 3 | **Never auto-retry.** See the hard rule below. |
+
+### Hard rule — never auto-retry `shop pay`
+
+`shop pay` clicks a real Pay button with a real one-time card. Auto-retrying risks **double-charging**:
+
+1. On any non-success envelope, read `data.outcome` and `data.suggestion` — the CLI already classifies whether funds could have moved.
+2. If `data.signals.paySubmitted` is `true` (outcome `pending` / `error`), the charge state is unknown — verify via the confirmation email / `~/.aicard/receipts` proof image / merchant order page **before** anything else.
+3. `challenge_3ds` means not-authorized-yet = not charged. Recover with one background rerun using `--wait-otp` and relay the code via the OTP file — not by blind repetition.
+4. Outcomes like `card_not_supported`, `shipping_not_ready`, `checkout_unavailable`, `bot_blocked` are merchant-side constraints — retrying the same command cannot fix them; change merchant/inputs instead.
+
 ## Generic Retry Helper (Node.js)
 
 ```js
