@@ -29,6 +29,7 @@ Supported agents: Claude Code, Cursor, Codex, OpenClaw, Gemini CLI, GitHub Copil
 | `topup` | Top up local wallet via WalletConnect (USDT + BNB for approve gas) | `--amount` (default `50`), `--skip-gas`, `--project-id` |
 | `gas` | Send BNB from main wallet to local wallet via WalletConnect (for withdraw gas) | `--amount` (default `0.001`), `--project-id` |
 | `withdraw` | Withdraw USDT from session key back to main wallet | `--amount` (default: all), `--to` |
+| `shop <subcommand>` | Shopify shopping: search → cart → pay → track (see [Shop & Pay](#shop--pay-on-shopify)) | — |
 | `clean` | Remove skill, uninstall package, and clear npm/npx cache | — |
 
 ### Examples
@@ -62,6 +63,53 @@ npx @aeon-ai-pay/aicard setup --show
 # Uninstall skill and clear cache
 npx @aeon-ai-pay/aicard clean
 ```
+
+## Shop & Pay on Shopify
+
+`aicard shop` turns the card into an end-to-end shopping agent: search real Shopify merchants, build a cart, then issue a one-time card and auto-fill the checkout with Playwright — a real order, shipped to your address.
+
+| Subcommand | Description | Key Options |
+|------------|-------------|-------------|
+| `shop search` | Semantic product search (global catalog, or one store with `--shop`) | `--query`, `--country`, `--max-price`, `--sort`, `--limit`, `--shop` |
+| `shop product` | Full product details (specs, colors, sizes) | `--id` (productId from search), `--shop` |
+| `shop cart` | Build a cart → totals + checkout URL | `--shop`, `--variant`, `--qty`, `--country`, `--region`, `--zip` |
+| `shop confirm` | Render a "Confirm Details" card to review shipping info before paying | `--first/--last/--email/--address1/...`, `--image` |
+| `shop pay` | Issue a card + auto-fill checkout + submit | `--continue-url`, `--amount`, `--email`, shipping fields, `--fill-only`, `--headful`, `--assist`, `--progress-file` |
+| `shop track` | Track order status | `--order`, `--shop`, `--bearer` |
+| `shop cards` | List locally cached cards (masked, last-4 only) | — |
+| `shop steps` | Render live per-step progress from `shop pay --progress-file` | `--progress-file`, `--html` |
+
+### The 4-step flow
+
+```bash
+# 1. Find products (global semantic search, or --shop for a single store)
+aicard shop search --query "wireless earbuds under $50" --country US --max-price 50
+
+# 2. Product details (specs / colors / sizes; use productId from search)
+aicard shop product --id <productId> --shop <domain>
+
+# 3. Build a cart → get total + checkout URL
+aicard shop cart --shop <domain> --variant <variantGid> --qty 1 \
+  --country US --region CA --zip 94107
+
+# 4. Issue card + auto-fill checkout + submit
+aicard shop pay \
+  --continue-url "<checkout URL from step 3>" \
+  --amount <cart total from step 3> \
+  --email you@real-email.com --first Jane --last Doe \
+  --address1 "..." --city ... --zip ... --country "United States" --phone ...
+```
+
+Step 4 internally: issue card (USDT charge, auto-funds via WalletConnect if short) → open checkout with Playwright → fill shipping address → wait for merchant shipping rates → fill card → submit → screenshot receipt.
+
+### Practical notes
+
+- **Dry-run first**: add `--fill-only` to fill everything but *not* submit — no order, no charge. Strongly recommended on a first try to confirm the address and card fill cleanly.
+- **Live progress**: `--progress-file /tmp/p.jsonl` streams structured per-step events (JSONL) as they happen; tail it (or run `shop steps --progress-file ...`) instead of waiting minutes for a black-box result.
+- **3DS / captcha**: `--headful` opens a visible browser so you can pass verification manually; `--assist` is the failure fallback — it opens a pre-filled window for you to finish and submit yourself.
+- **Amount must match**: `--amount` must equal the cart total (tax + shipping included). Cards are one-time-use — an underfunded card can't pay.
+- **Use a real email**: order confirmation and shipping updates go there.
+- **Card PII is never exposed**: output shows last-4 only; checkout screenshots of the card step are masked in any rendered timeline/HTML.
 
 ## Prerequisites
 
