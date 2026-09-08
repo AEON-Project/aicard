@@ -1,4 +1,4 @@
-# aicard
+# Agentic Checkout
 
 An agent skill for creating instant, one-time-use virtual Visa/Mastercard cards your agent can **pay with online** — top up with crypto, then spend at real merchants.
 
